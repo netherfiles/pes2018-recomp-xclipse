@@ -134,11 +134,20 @@ object Trail {
     }
 
     /**
-     * The run is up. The lines stay: the failures worth reading happen after
-     * a start that looked successful.
+     * The run is up: the point past which a failure is a failure in a started
+     * run, not one in starting it.
+     *
+     * The lines stay: the failures worth reading happen after a start that
+     * looked successful. This used to write `run.clean-end`, which read as the
+     * opposite -- both callers run it straight after the runtime starts, so
+     * every run carried a clean end before it had ended and a later crash in
+     * that run still looked clean. A run closes cleanly when GameActivity
+     * writes `game.end`; this note says only that the start finished.
+     *
+     * The name is kept because the call sites are about a start that finished.
      */
     fun clear(context: Context) {
-        EventLog.note(context, "run.clean-end")
+        EventLog.note(context, "startup.ready")
     }
 
     fun lastCrash(context: Context): String {

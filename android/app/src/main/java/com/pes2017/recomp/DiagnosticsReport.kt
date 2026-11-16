@@ -35,6 +35,12 @@ object DiagnosticsReport {
         val bytes: Long,
         val mtime: Long,
         val status: Status,
+        /**
+         * What a reader needs to interpret this row when the file does not say
+         * it itself, such as a head copied without a run marker. Empty for
+         * almost every entry, and not part of the manifest's schema.
+         */
+        val note: String = "",
     )
 
     data class App(
@@ -164,6 +170,12 @@ object DiagnosticsReport {
 
         out.append("\nAndroid\n")
         appendBlock(out, facts.androidReport.trim().ifEmpty { "not available" })
+        // The rows above are Android's own account, and the commonest one reads
+        // as a crash. It is not: the app kills the `:game` process itself once
+        // the run is over, so SIGNALED is what a normal quit looks like here.
+        // What says a run ended cleanly is its `game.end` event, not this code.
+        out.append("note: SIGNALED (reason=2) on :game is this app's own kill after a quit, not a crash;\n")
+        out.append("      a run with no game.end event did not close cleanly\n")
 
         out.append("\nStorage\n")
         appendPairs(out, facts.storage, "app storage")
@@ -271,7 +283,10 @@ object DiagnosticsReport {
             out.append(oneLine(entry.path, PATH_WIDTH - 1).padEnd(PATH_WIDTH))
                 .append(entry.status.json.padEnd(9))
                 .append(entry.bytes.toString().padStart(10))
-                .append("  ").append(stamp(entry.mtime)).append('\n')
+                .append("  ").append(stamp(entry.mtime))
+            // In the row, not in a paragraph: the note explains this file only.
+            if (entry.note.isNotEmpty()) out.append("  (").append(oneLine(entry.note, NOTE_WIDTH)).append(')')
+            out.append('\n')
         }
         if (facts.redactions.isNotEmpty()) {
             out.append("redacted: ").append(facts.redactions.joinToString("; ")).append('\n')
@@ -634,6 +649,9 @@ object DiagnosticsReport {
     private const val MAX_UI = 20
     private const val MAX_OTHER = 12
     private const val PATH_WIDTH = 48
+
+    /** A row's note, if it has one, stays inside the page like everything else. */
+    private const val NOTE_WIDTH = 100
     private const val MAX_REPORT_CHARS = 190_000
     private const val SUMMARY_UI = 5
     private const val SUMMARY_LINES = 40

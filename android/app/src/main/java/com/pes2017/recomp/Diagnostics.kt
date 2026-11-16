@@ -17,6 +17,7 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -56,6 +57,13 @@ object Diagnostics {
 
     /** game.log is the run's own account and gets the most room. */
     private const val GAME_LOG_BYTES = 2 * 1024 * 1024
+
+    /**
+     * How that run began: the marker, the build, the driver and the capacity
+     * line. Small, but it is the first thing a run longer than [GAME_LOG_BYTES]
+     * loses to the tail above, and the first thing a developer reads.
+     */
+    private const val GAME_START_BYTES = 64 * 1024
 
     /** Everything else: a tail long enough for a fault, short enough to read. */
     private const val TAIL_BYTES = 256 * 1024
@@ -272,11 +280,11 @@ object Diagnostics {
         val external = context.getExternalFilesDir(null)
         // The runtime writes game.log twice: once in the app's own files and
         // once beside its external files for a developer who can reach them.
-        copyTailEntry(
-            context, zip, entries, "logs/game.log",
-            firstFile(File(internal, "game.log"), external?.let { File(it, "game.log") }),
-            GAME_LOG_BYTES,
-        )
+        val gameLog = firstFile(File(internal, "game.log"), external?.let { File(it, "game.log") })
+        copyTailEntry(context, zip, entries, "logs/game.log", gameLog, GAME_LOG_BYTES)
+        // The same file again, from where this run starts: the tail above is
+        // capped, and a run past the cap loses its own header first.
+        copyRunStart(context, zip, entries, gameLog)
         copyTailEntry(
             context, zip, entries, "logs/game.log.1",
             firstFile(File(internal, "game.log.1"), external?.let { File(it, "game.log.1") }),
@@ -288,6 +296,145 @@ object Diagnostics {
             copyTailEntry(context, zip, entries, "logs/$name", File(internal, name), TAIL_BYTES)
             copyTailEntry(context, zip, entries, "logs/$name.1", File(internal, "$name.1"), TAIL_BYTES)
         }
+    }
+
+    /**
+     * `logs/game.log.start`: how the run in `logs/game.log` began.
+     *
+     * The runtime writes the run marker before anything else, so the head runs
+     * from the last marker in the file -- that is the run whose tail is beside
+     * it, not the one before. A file without a marker (rotated, or trimmed on
+     * a computer) still has a beginning, so its head is copied and the evidence
+     * row says which of the two it is.
+     */
+    private fun copyRunStart(
+        context: Context,
+        zip: ZipOutputStream,
+        entries: MutableList<Entry>,
+        file: File?,
+    ) {
+        val zipPath = "logs/game.log.start"
+        if (file == null || !file.isFile) {
+            entries += Entry(zipPath, 0, 0, Status.MISSING)
+            return
+        }
+        val mtime = runCatching { file.lastModified() }.getOrDefault(0L)
+        try {
+            // Opened before the read, like copyTailEntry: the entry is there to
+            // close, so a file that cannot be read costs its own row and not
+            // the whole export.
+            zip.putNextEntry(ZipEntry(zipPath).also { if (mtime > 0) it.time = mtime })
+            val (text, note) = runStartText(file)
+            // Scrubbed line by line like everything else here: no rule may
+            // match across a line end.
+            val body = text.lineSequence().joinToString("\n") { Scrub.text(context, it) }
+            val bytes = body.toByteArray(Charsets.UTF_8)
+            zip.write(bytes)
+            zip.closeEntry()
+            entries += Entry(
+                zipPath,
+                bytes.size.toLong(),
+                mtime,
+                if (bytes.isEmpty()) Status.EMPTY else Status.PRESENT,
+                // An empty file is `empty`; a note about where a copy came
+                // from would contradict the status beside it.
+                if (bytes.isEmpty()) "" else note,
+            )
+        } catch (t: Throwable) {
+            if (runCatching { zip.closeEntry() }.isFailure) throw t
+            Log.w(TAG, "could not add $zipPath", t)
+            entries += Entry(zipPath, 0, mtime, Status.ERROR)
+        }
+    }
+
+    /** The text of this run's head, and what the evidence row should say about it. */
+    private fun runStartText(file: File): Pair<String, String> {
+        val at = lastRunStart(file)
+        val bytes = readHead(file, at ?: 0L, GAME_START_BYTES)
+        // Half a line at the cap reads as corruption; the last full one is the
+        // honest end of a head.
+        val text = String(bytes, 0, lastNewline(bytes), Charsets.UTF_8)
+        val note = if (at != null) {
+            ""
+        } else {
+            "no run marker; copied the first ${DiagnosticsReport.size(GAME_START_BYTES.toLong())}"
+        }
+        return text to note
+    }
+
+    /**
+     * Up to [maxBytes] from [from], read straight from the file. game.log is
+     * capped at 4 MB; this must not be the export that loads it into memory.
+     */
+    private fun readHead(file: File, from: Long, maxBytes: Int): ByteArray {
+        RandomAccessFile(file, "r").use { input ->
+            val length = (input.length() - from).coerceIn(0L, maxBytes.toLong()).toInt()
+            if (length <= 0) return ByteArray(0)
+            input.seek(from)
+            val bytes = ByteArray(length)
+            var read = 0
+            // The runtime may still be appending: a short read is a shorter
+            // head, not a reason to fail the entry.
+            while (read < length) {
+                val n = input.read(bytes, read, length - read)
+                if (n <= 0) break
+                read += n
+            }
+            return if (read == length) bytes else bytes.copyOf(read)
+        }
+    }
+
+    /**
+     * The offset of the last [RUN_MARKER] in [file], or null when it holds none.
+     *
+     * Forward, [LogTail.CHUNK] at a time, carrying the marker's length minus
+     * one byte over so a marker split across two reads is still found. The file
+     * is capped at 4 MB, so one pass costs one 64 KB buffer, not the file.
+     */
+    private fun lastRunStart(file: File): Long? {
+        val marker = RUN_MARKER_BYTES
+        var found: Long? = null
+        RandomAccessFile(file, "r").use { input ->
+            val buffer = ByteArray(LogTail.CHUNK + marker.size - 1)
+            // Where buffer[0] sits in the file, so a hit in the window is a
+            // file offset.
+            var offset = 0L
+            var carried = 0
+            while (true) {
+                val n = input.read(buffer, carried, LogTail.CHUNK)
+                if (n <= 0) break
+                val length = carried + n
+                var at = 0
+                while (at + marker.size <= length) {
+                    if (buffer[at] == marker[0] && matchesAt(buffer, at, marker)) {
+                        found = offset + at
+                        at += marker.size
+                    } else {
+                        at++
+                    }
+                }
+                val keep = minOf(marker.size - 1, length)
+                System.arraycopy(buffer, length - keep, buffer, 0, keep)
+                offset += length - keep
+                carried = keep
+            }
+        }
+        return found
+    }
+
+    private fun matchesAt(buffer: ByteArray, at: Int, marker: ByteArray): Boolean {
+        for (i in marker.indices) {
+            if (buffer[at + i] != marker[i]) return false
+        }
+        return true
+    }
+
+    /** One past the last `\n` in [bytes], or its length when it holds none. */
+    private fun lastNewline(bytes: ByteArray): Int {
+        for (at in bytes.indices.reversed()) {
+            if (bytes[at].toInt() == NEWLINE) return at + 1
+        }
+        return bytes.size
     }
 
     private fun copyCrashes(context: Context, zip: ZipOutputStream, entries: MutableList<Entry>) {
@@ -758,6 +905,18 @@ object Diagnostics {
     }
 
     // ---- small things -------------------------------------------------------
+
+    /**
+     * The runtime's separator, written before a run's first line
+     * (runtime/android/log.cpp). The tools grep for it, and so does the head
+     * above: it is the only way to tell one run from the one before it in a
+     * file that is appended to.
+     */
+    private const val RUN_MARKER = "===== new run"
+    private val RUN_MARKER_BYTES = RUN_MARKER.toByteArray(Charsets.US_ASCII)
+
+    /** `\n`, compared against a byte read from a file. */
+    private const val NEWLINE = 0x0A
 
     private fun firstFile(vararg files: File?): File? = files.firstOrNull { it != null && it.isFile }
 
