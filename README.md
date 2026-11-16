@@ -104,6 +104,21 @@ Gradle. Game files go to `Android/data/com.pes2018.recomp/files/game/` (about 7.
 - **Smoother and lighter:** built pipelines are kept on disk and reused next launch, and the texture cache is
   sized from the phone's memory.
 
+## Reporting a bug
+
+A report without evidence is a guess. In the app, open **LOG** and choose **Export report**; the ZIP holds the
+logs, the event timeline, patch state, Android's exit reasons and any main-thread stall. It does not contain
+game files, saves or account data — paths and names are redacted or left out.
+
+Attach that ZIP to a new issue and say:
+
+1. the app version from the footer (for example `0.2.9-patches · build 17`);
+2. the phone, SoC and Android version;
+3. the exact steps, and where it stopped;
+4. whether a data pack is installed.
+
+If the app crashed before the export existed, the next launch offers the last crash; export from there.
+
 ## What you need to build it
 
 | Requirement | Used for |

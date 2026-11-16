@@ -1,0 +1,79 @@
+name: Bug report
+description: Something went wrong in PES 2018 on Android
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A report without the diagnostics ZIP usually cannot be acted on.
+
+        **Attach the ZIP from LOG → Export report.** It contains the logs, the event timeline, patch state,
+        Android's exit reasons and the main-thread stall record. It does **not** contain game files, saves or
+        your account.
+
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: SETTINGS footer, or the line under the main menu (for example 0.2.9-patches · build 17).
+      placeholder: 0.2.9-patches · build 17
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Phone and Android
+      description: Model, SoC and Android version (for example Xiaomi 14T Pro, Dimensity 9300+, Android 16).
+      placeholder: Xiaomi 14T Pro · Dimensity 9300+ · Android 16
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen?
+      options:
+        - Starting the game
+        - In a match (performance, crash, flicker)
+        - Installing or updating a patch
+        - Save backup or restore
+        - Touch controls or gamepad
+        - Graphics driver
+        - Export report or logs
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The exact steps, in order, starting from opening the app.
+      placeholder: |
+        1. Opened the app
+        2. Tapped PATCHES → REPLACE → KEEP AS BACKUP
+        3. Chose Patch ONFIRE 2026.zip
+        4. The bar stopped at 85 %
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: I attached the diagnostics ZIP from LOG → Export report.
+          required: true
+        - label: I am not attaching game files, saves or an APK built from someone else's disc.
+          required: true
+        - label: I checked the known limits in the release notes (PES 2018 only, disc XEX v16).
+          required: true
