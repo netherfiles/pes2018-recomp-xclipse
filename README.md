@@ -6,10 +6,14 @@ and built with the Android NDK. A host runtime stands in for the console's kerne
 and a Kotlin app installs the game files, configures the run and starts the native library. The app also
 installs patch data packs beside the game, backs up saves, and exports a diagnostics report.
 
+This is the maintained **PES 2018** fork of
+[dzakyraf/pes2017-recomp](https://github.com/dzakyraf/pes2017-recomp). The PES 2017 build lives upstream;
+this branch runs PES 2018 only, under its own package (`com.pes2018.recomp`).
+
 Status: work in progress. The port boots to the title screen and plays an Exhibition match at 60 FPS on a
-Xiaomi 14T Pro (Dimensity 9300+, Mali-G720, Android 16); performance is limited by the phone's heat before it
-is limited by the code. Other modes and save round-trips are unverified, and the on-device PATCHES install
-gate is still pending. [docs/PES2018.md](docs/PES2018.md) says exactly what works and what is left.
+Xiaomi 14T Pro (Dimensity 9300+, Mali-G720, Android 16); a three-hour session ran without an issue, with
+performance limited by the phone's heat before it is limited by the code. Other modes and save round-trips are
+still unverified. [docs/PES2018.md](docs/PES2018.md) says exactly what works and what is left.
 
 You need your own copy of the game. Nothing from it is in this repository.
 
@@ -19,9 +23,10 @@ You need your own copy of the game. Nothing from it is in this repository.
    are about 7.3 GB). The tested phone is a Xiaomi 14T Pro.
 2. **Get the game files:** see [Which copy of the game you need](#which-copy-of-the-game-you-need) below, and
    copy them to the phone.
-3. **Install the app:** install a release APK from `release/` (`PES2018-recomp-<version>-patches.apk`) over USB
-   or by opening it on the phone, or build it from `android/` with `./gradlew :app:assembleRelease` (see
-   [Build](#build)). Allow installs from your file manager if asked.
+3. **Install the app:** install the APK from
+   [the latest release](https://github.com/sharifhidayatulloh/pes2017-recomp/releases/latest)
+   (`PES2018-recomp-<version>-patches.apk`) over USB or by opening it on the phone, or build it from `android/`
+   with `./gradlew :app:assembleRelease` (see [Build](#build)). Allow installs from your file manager if asked.
 4. **Install the game:** open **SETTINGS → GAME FILES** and tap **Install the game files** (or tap **KICK OFF**
    when the app has already found a disc image). On the install screen choose **Browse the phone's storage** (or
    **Choose with the Files app**), pick the ISO or the extracted folder, and tap **Install**. If it stops, start
