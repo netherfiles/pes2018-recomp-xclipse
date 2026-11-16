@@ -24,7 +24,7 @@ You need your own copy of the game. Nothing from it is in this repository.
 2. **Get the game files:** see [Which copy of the game you need](#which-copy-of-the-game-you-need) below, and
    copy them to the phone.
 3. **Install the app:** install the APK from
-   [the latest release](https://github.com/sharifhidayatulloh/pes2017-recomp/releases/latest)
+   [the latest release](https://github.com/sharifhidayatulloh/pes2018-recomp/releases/latest)
    (`PES2018-recomp-<version>-patches.apk`) over USB or by opening it on the phone, or build it from `android/`
    with `./gradlew :app:assembleRelease` (see [Build](#build)). Allow installs from your file manager if asked.
 4. **Install the game:** open **SETTINGS → GAME FILES** and tap **Install the game files** (or tap **KICK OFF**
