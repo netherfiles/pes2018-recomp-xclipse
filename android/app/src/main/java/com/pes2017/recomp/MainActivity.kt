@@ -9,14 +9,16 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.documentfile.provider.DocumentFile
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -41,9 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var footer: TextView
     private lateinit var play: Button
-    private lateinit var installButton: Button
-    private lateinit var selectFolderButton: Button
-    private lateinit var updatesButton: Button
+    private lateinit var patches: Button
     private lateinit var quitButton: Button
     private lateinit var detailTitle: TextView
     private lateinit var detailText: TextView
@@ -56,20 +56,31 @@ class MainActivity : AppCompatActivity() {
 
     /** The match asked to be started again with new settings (QuickGraphics). */
     private var relaunchRequested = false
-    private var installRequired = false
     private var pendingInstallId: Long = -1
     private var pendingUpdateUrl: String? = null
 
-    /** The tree the player picked while the app still lacked storage access. */
-    private var pendingTree: Uri? = null
+    /**
+     * A diagnostics report is being written. The export walks every log file, so
+     * the button that started it is held down until it answers: two taps must not
+     * write two zips over each other.
+     */
+    private var exporting = false
 
-    private val pickTree = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) onFolderPicked(uri)
+    /**
+     * Choosing the game folder lives in GameFolderActivity: the picker, the
+     * all-files permission and the check of default.xex. It comes back having
+     * written Prefs.gameDirectory, so the only job here is to show the result.
+     */
+    private val folderPicker = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode != RESULT_OK) return@registerForActivityResult
+        val path = result.data?.getStringExtra(GameFolderActivity.EXTRA_PATH)
+        if (!path.isNullOrEmpty()) {
+            showDetail(getString(R.string.folder_title), getString(R.string.folder_set, path))
+        }
+        refresh()
     }
-
-    private val legacyPermission = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) { resumePendingFolder() }
 
     private val downloadDone = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -92,9 +103,7 @@ class MainActivity : AppCompatActivity() {
         status = findViewById(R.id.status)
         footer = findViewById(R.id.footer)
         play = findViewById(R.id.play)
-        installButton = findViewById(R.id.install)
-        selectFolderButton = findViewById(R.id.select_folder)
-        updatesButton = findViewById(R.id.entry_updates)
+        patches = findViewById(R.id.patches)
         quitButton = findViewById(R.id.entry_quit)
         detailTitle = findViewById(R.id.detail_title)
         detailText = findViewById(R.id.detail_text)
@@ -124,28 +133,24 @@ class MainActivity : AppCompatActivity() {
             if (installed) {
                 startGame()
             } else if (detectedSource?.isFolder == true) {
-                // Already extracted: played where it is, nothing copied.
-                useFolder(detectedSource!!.file, null)
+                // Already extracted: verified where it lies, nothing copied.
+                folderPicker.launch(
+                    Intent(this, GameFolderActivity::class.java)
+                        .putExtra(GameFolderActivity.EXTRA_START_PATH, detectedSource!!.file.absolutePath),
+                )
             } else if (detectedSource != null) {
-                val intent = Intent(this, InstallActivity::class.java).apply {
-                    putExtra(InstallActivity.EXTRA_INITIAL_PATH, detectedSource!!.file.absolutePath)
-                    putExtra(InstallActivity.EXTRA_AUTO_START, true)
-                }
-                startActivity(intent)
+                // A disc image (or a folder to copy from) the launcher found:
+                // the installer opens on it and starts by itself.
+                installGame()
             } else {
                 // Nothing to play yet: the natural next step is choosing the folder.
                 selectGameFolder()
             }
         }
-        selectFolderButton.setOnClickListener {
-            select(selectFolderButton)
-            selectGameFolder()
-        }
-        installButton.setOnClickListener {
-            select(installButton)
-            showDetail(getString(R.string.install_game), getString(R.string.install_hint))
-            if (detectedSources.size > 1) chooseSource()
-            else startActivity(Intent(this, InstallActivity::class.java))
+        patches.setOnClickListener {
+            select(patches)
+            showDetail(getString(R.string.entry_patches), getString(R.string.patches_menu_hint))
+            startActivity(Intent(this, PatchesActivity::class.java))
         }
         findViewById<Button>(R.id.driver).setOnClickListener {
             select(it as Button)
@@ -161,11 +166,6 @@ class MainActivity : AppCompatActivity() {
             select(it as Button)
             showDetail(getString(R.string.view_log), "")
             showLog()
-        }
-        updatesButton.setOnClickListener {
-            select(updatesButton)
-            showDetail(getString(R.string.check_updates), "")
-            checkForUpdates(manual = true)
         }
         quitButton.setOnClickListener {
             select(quitButton)
@@ -251,154 +251,52 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Back from the all-files permission screen with a folder waiting.
-        // This comes first so a freshly chosen folder is what refresh() shows
-        // (and what direct launch would start).
-        resumePendingFolder()
+        recoverPatchesIfIdle()
         refresh()
+        refreshDetail()
         pendingUpdateUrl?.let { url ->
             pendingUpdateUrl = null
             if (packageManager.canRequestPackageInstalls()) startUpdateDownload(url)
         }
     }
 
+    /**
+     * The detail panel of the entry the cursor is on, drawn again so that a
+     * return from Settings or PATCHES does not leave the old figures there.
+     * KICK OFF's detail is the menu's own status line.
+     */
+    private fun refreshDetail() {
+        if (selectedEntry === play) showDetail(getString(R.string.play), status.text.toString())
+    }
+
+    /**
+     * The Application skips journal recovery while `:game` is alive, because a
+     * running game may be between RotatePackage's two renames. When the player
+     * comes back to the launcher, that reason is gone; run the recovery now so
+     * a stale journal does not keep Play and PATCHES disabled until restart.
+     */
+    private fun recoverPatchesIfIdle() {
+        val context = applicationContext
+        thread(name = "patch-recover", isDaemon = true) {
+            runCatching { PatchesRepository.recover(context) }
+        }
+    }
+
     // ---- choosing the game folder ------------------------------------------------
 
     /**
-     * Select Game Folder: the system folder picker, then -- only if the folder
-     * is outside the app's own storage and Android has not yet allowed the app
-     * to read it -- the permission prompt. The game runs from the chosen folder
-     * as it lies; nothing is copied unless the player prefers that.
+     * Select Game Folder: the system picker, the all-files permission and the
+     * check of default.xex all live in GameFolderActivity, because Settings
+     * needs the same thing. It comes back having written Prefs.gameDirectory;
+     * the folder picker result shows the outcome.
      */
     private fun selectGameFolder() {
         showDetail(getString(R.string.entry_select_folder), getString(R.string.select_folder_hint))
         try {
-            pickTree.launch(null)
+            folderPicker.launch(Intent(this, GameFolderActivity::class.java))
         } catch (_: Throwable) {
             message(getString(R.string.folder_unreadable_path))
         }
-    }
-
-    private fun onFolderPicked(tree: Uri) {
-        val picked = GameFolder.pathOf(tree)
-        if (picked == null) {
-            // A provider with no path behind it: the only way in is a copy.
-            offerCopy(tree)
-            return
-        }
-        if (!GameFolder.hasAccess(this)) {
-            pendingTree = tree
-            prefs.pendingFolder = picked.absolutePath
-            askForAccess(tree)
-            return
-        }
-        useFolder(picked, tree)
-    }
-
-    private fun askForAccess(tree: Uri) {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.access_title)
-            .setMessage(R.string.access_explained)
-            .setNegativeButton(R.string.cancel) { _, _ ->
-                pendingTree = null
-                prefs.pendingFolder = ""
-            }
-            .setNeutralButton(R.string.copy_instead) { _, _ ->
-                pendingTree = null
-                prefs.pendingFolder = ""
-                offerCopy(tree)
-            }
-            .setPositiveButton(R.string.allow_storage) { _, _ -> requestAccess() }
-            .show()
-    }
-
-    private fun requestAccess() {
-        val intent = GameFolder.accessIntent(this)
-        if (intent == null) {
-            legacyPermission.launch(GameFolder.legacyPermissions)
-            return
-        }
-        try {
-            startActivity(intent)
-        } catch (_: Throwable) {
-            try {
-                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-            } catch (_: Throwable) {
-            }
-        }
-    }
-
-    /** Back from the permission screen: carry on with the folder that was waiting. */
-    private fun resumePendingFolder() {
-        val path = prefs.pendingFolder
-        if (path.isEmpty() || !GameFolder.hasAccess(this)) return
-        val tree = pendingTree
-        prefs.pendingFolder = ""
-        pendingTree = null
-        useFolder(File(path), tree)
-    }
-
-    /** Looks for default.xex in the folder (or one level down) and offers to use it. */
-    private fun useFolder(picked: File, tree: Uri?) {
-        thread(name = "folder-check") {
-            val game = try {
-                GameFolder.locate(picked)
-            } catch (_: Throwable) {
-                null
-            }
-            runOnUiThread {
-                when {
-                    game == null && picked.listFiles() == null && tree != null -> offerCopy(tree)
-                    game == null -> message(getString(R.string.folder_no_xex))
-                    else -> verifyAndSet(game, picked)
-                }
-            }
-        }
-    }
-
-    private fun verifyAndSet(game: File, picked: File) {
-        thread(name = "folder-hash") {
-            val matches = try {
-                GameFolder.sha256(File(game, GameFolder.XEX)).equals(BuildConfig.PES_XEX_SHA256, ignoreCase = true)
-            } catch (_: Throwable) {
-                false
-            }
-            runOnUiThread {
-                if (matches) {
-                    setGameFolder(game, picked)
-                } else {
-                    AlertDialog.Builder(this)
-                        .setTitle(R.string.folder_title)
-                        .setMessage(getString(R.string.folder_wrong_game) + "\n\n" + game.absolutePath)
-                        .setNegativeButton(R.string.cancel, null)
-                        .setPositiveButton(R.string.folder_use_anyway) { _, _ -> setGameFolder(game, picked) }
-                        .show()
-                }
-            }
-        }
-    }
-
-    private fun setGameFolder(game: File, picked: File) {
-        prefs.gameDirectory = game.absolutePath
-        val inside = if (game != picked) getString(R.string.folder_found_inside, game.absolutePath) + "\n\n" else ""
-        showDetail(getString(R.string.folder_title), inside + getString(R.string.folder_set, game.absolutePath))
-        refresh()
-    }
-
-    private fun offerCopy(tree: Uri) {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.folder_title)
-            .setMessage(R.string.folder_unreadable_path)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.copy_instead) { _, _ ->
-                startActivity(
-                    Intent(this, InstallActivity::class.java).apply {
-                        data = tree
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    },
-                )
-            }
-            .show()
     }
 
     private fun message(text: String) {
@@ -437,12 +335,16 @@ class MainActivity : AppCompatActivity() {
         val installed = gameDirectory.isNotEmpty() && safely(false) {
             NativeBridge.nativeGameInstalled(gameDirectory)
         }
+        val installing = PatchesRepository.isInstalling(this)
 
         if (installed) {
-            play.isEnabled = true
+            play.isEnabled = !installing
             play.text = getString(R.string.play)
-            status.text = getString(if (autoFound) R.string.status_ready_auto else R.string.status_ready, gameDirectory)
-            installButton.visibility = android.view.View.GONE
+            status.text = if (installing) {
+                getString(R.string.patch_import_busy)
+            } else {
+                getString(if (autoFound) R.string.status_ready_auto else R.string.status_ready, gameDirectory)
+            }
             directLaunchSwitch.visibility = android.view.View.VISIBLE
 
             if (relaunchRequested) {
@@ -463,7 +365,6 @@ class MainActivity : AppCompatActivity() {
             val chosen = detectedSources.firstOrNull { it.file.absolutePath == prefs.lastSource }
                 ?: detectedSources.firstOrNull()
             detectedSource = chosen
-            installButton.visibility = android.view.View.VISIBLE
             directLaunchSwitch.visibility = android.view.View.GONE
 
             if (gameDirectory.isNotEmpty()) {
@@ -481,17 +382,10 @@ class MainActivity : AppCompatActivity() {
                 val more = if (detectedSources.size > 1) "\n${detectedSources.size - 1} other source(s) found." else ""
                 val ready = if (chosen.isFolder) "Plays from this folder, nothing copied." else "Ready for one-click setup."
                 status.text = "Game found (${chosen.kind}):\n${chosen.file.name}\n$ready$more"
-                installButton.text = if (detectedSources.size > 1) "Choose Game Source (${detectedSources.size})" else "Choose Another Source"
             } else {
                 play.isEnabled = true
                 play.text = getString(R.string.play)
                 status.text = getString(R.string.status_not_installed)
-                installButton.text = getString(R.string.entry_install)
-                // Nothing installed and nothing to install from in sight: installing is the only way on.
-                if (!installRequired) {
-                    installRequired = true
-                    startActivity(Intent(this, InstallActivity::class.java).putExtra(InstallActivity.EXTRA_REQUIRED, true))
-                }
             }
         }
 
@@ -504,6 +398,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun filesDirParent(): String = (getExternalFilesDir(null) ?: filesDir).absolutePath
 
+    /**
+     * INSTALL GAME, from KICK OFF: the source the launcher found. When the phone
+     * offers more than one, [chooseSource] asks which. The installer opens on
+     * the source and starts by itself; on the way back, onResume redraws the menu.
+     */
+    private fun installGame() {
+        showDetail(getString(R.string.install_game), getString(R.string.install_hint))
+        if (detectedSources.size > 1) {
+            chooseSource()
+            return
+        }
+        val source = detectedSource
+        if (source == null) {
+            startActivity(Intent(this, InstallActivity::class.java))
+        } else {
+            installFrom(source)
+        }
+    }
+
+    /** The installer, already pointed at the source and starting by itself. */
+    private fun installFrom(source: GameSource) {
+        startActivity(
+            Intent(this, InstallActivity::class.java).apply {
+                putExtra(InstallActivity.EXTRA_INITIAL_PATH, source.file.absolutePath)
+                putExtra(InstallActivity.EXTRA_AUTO_START, true)
+            },
+        )
+    }
+
     /** Pick which disc image or folder to install from, or go and look for another. */
     private fun chooseSource() {
         val names = detectedSources.map {
@@ -513,8 +436,10 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.install_game)
             .setItems(names.toTypedArray()) { _, which ->
                 if (which < detectedSources.size) {
-                    prefs.lastSource = detectedSources[which].file.absolutePath
-                    refresh()
+                    val chosen = detectedSources[which]
+                    prefs.lastSource = chosen.file.absolutePath
+                    detectedSource = chosen
+                    installFrom(chosen)
                 } else {
                     startActivity(Intent(this, InstallActivity::class.java))
                 }
@@ -578,6 +503,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun startGame() {
         if (!nativeReady) return
+        if (PatchesRepository.isInstalling(this)) {
+            message(getString(R.string.patch_import_busy))
+            return
+        }
         // A copy of the saves before every run (SaveBackup), taken before the
         // game's process exists, so nothing is writing them while they are read.
         val context = applicationContext
@@ -613,9 +542,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** A newer published APK, if there is one: silent when offline. */
-    private fun checkForUpdates(manual: Boolean = false) {
+    private fun checkForUpdates() {
         thread(name = "update-check", isDaemon = true) {
-            var offered = false
             try {
                 if (RELEASES_API.isEmpty()) throw IllegalStateException("no release feed")
                 val connection = (URL(RELEASES_API)
@@ -643,19 +571,10 @@ class MainActivity : AppCompatActivity() {
                         val page = release.optString("html_url")
                         val apkUrl = apk.optString("browser_download_url")
                         val notes = release.optString("body").take(1500)
-                        offered = true
                         runOnUiThread { showUpdateDialog(tag, page, apkUrl, notes, installed, code) }
                     }
                 }
             } catch (_: Throwable) {
-            }
-            if (manual && !offered) {
-                runOnUiThread {
-                    AlertDialog.Builder(this)
-                        .setMessage(R.string.up_to_date)
-                        .setPositiveButton(R.string.close, null)
-                        .show()
-                }
             }
         }
     }
@@ -713,7 +632,7 @@ class MainActivity : AppCompatActivity() {
                 .setTitle("PES 2018 update")
                 .setDescription("Downloading APK")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "pes17-update.apk")
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "pes18-update.apk")
                 .setAllowedOverMetered(true)
             pendingInstallId = manager.enqueue(request)
             Toast.makeText(this, R.string.update_downloading, Toast.LENGTH_SHORT).show()
@@ -748,18 +667,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showLastCrash(crash: String) {
+        // The report is filed under the crash's own title: the stamp and the
+        // exception line, which is what identifies it without typing.
+        val title = crash.lines().firstOrNull { it.isNotBlank() }?.take(120) ?: ""
         AlertDialog.Builder(this)
             .setTitle(R.string.last_crash)
             .setMessage(crash.take(4000))
             .setPositiveButton(R.string.close) { _, _ -> Trail.forgetCrash(this) }
             .setNeutralButton(R.string.share) { _, _ -> share(crash) }
+            .setNegativeButton(R.string.diagnostics_export) { _, _ -> exportReport(title, null) }
             .show()
     }
 
     /**
      * The log screen: a summary of it, with the whole thing one button away
      * (LogSummary says what is kept and what is only counted). Share sends the
-     * whole log, because that is what a bug report needs.
+     * whole log as text, scrubbed; the report is the diagnostics export, which
+     * carries every file rather than 60 KB of each.
      */
     private fun showLog() {
         val session = if (nativeReady) safely("") { NativeBridge.nativeLogTail() } else ""
@@ -775,33 +699,151 @@ class MainActivity : AppCompatActivity() {
 
     private fun showLogText(text: String, textSize: Float) {
         val body = TextView(this)
-        body.setPadding(32, 24, 32, 24)
+        body.setPadding(0, 24, 0, 24)
         body.textSize = textSize
         body.setTextIsSelectable(true)
         body.text = text
         val scroll = ScrollView(this)
         scroll.addView(body)
-        AlertDialog.Builder(this)
+        // The report is filed under one line: what went wrong, starting from the
+        // last crash so a bug report is never an empty subject.
+        val note = EditText(this).apply {
+            hint = getString(R.string.diagnostics_note_hint)
+            setText(lastCrashLine())
+            maxLines = 1
+        }
+        // The log takes a share of the screen and the note sits under it, so both
+        // fit a landscape phone as well as a portrait one. A height in pixels
+        // rather than a weight, because a dialog's content is measured with a
+        // wrap_content window and a weighted child can come out with nothing.
+        val tall = (resources.displayMetrics.heightPixels * 0.55f).toInt()
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 0, 32, 0)
+            addView(scroll, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, tall))
+            addView(note, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.view_log)
-            .setView(scroll)
+            .setView(column)
             .setPositiveButton(R.string.close, null)
             .setNegativeButton(R.string.log_everything) { _, _ -> showWholeLog() }
-            .setNeutralButton(R.string.share) { _, _ -> share(wholeLog()) }
-            .show()
+            .setNeutralButton(R.string.diagnostics_export, null)
+            .create()
+        // The third button exports instead of sharing (the builder's callback
+        // cannot hold the button it must disable while the zip is written).
+        dialog.setOnShowListener {
+            val export = dialog.getButton(android.content.DialogInterface.BUTTON_NEUTRAL)
+            export.setOnClickListener { exportReport(note.text.toString(), export) }
+        }
+        dialog.show()
     }
 
-    /** What Share sends: every log and crash file, not the summary. */
-    private fun wholeLog(): String {
-        val session = if (nativeReady) safely("") { NativeBridge.nativeLogTail() } else ""
-        return LogSummary.whole(this, session)
+    /** The first line of the last crash, which is where the note field starts. */
+    private fun lastCrashLine(): String =
+        Trail.lastCrash(this).lineSequence().firstOrNull { it.isNotBlank() }?.take(120) ?: ""
+
+    /**
+     * Writes the diagnostics report and offers it. [button] is the action that
+     * asked for it, held down until the answer arrives because the export reads
+     * every log file on the way.
+     */
+    private fun exportReport(note: String, button: Button?) {
+        if (exporting) return
+        exporting = true
+        button?.isEnabled = false
+        Diagnostics.export(this, note) { done ->
+            runOnUiThread {
+                exporting = false
+                try { button?.isEnabled = true } catch (_: Throwable) {}
+                if (!isFinishing && !isDestroyed) showReportResult(this, done)
+            }
+        }
     }
 
     private fun share(text: String) {
         val intent = Intent(Intent.ACTION_SEND)
         intent.type = "text/plain"
         intent.putExtra(Intent.EXTRA_SUBJECT, "PES 2018 log")
-        intent.putExtra(Intent.EXTRA_TEXT, text.takeLast(200_000))
+        // A log carries the folder the game was installed from and every path
+        // the runtime opened; it is shared around, so the paths come out first.
+        intent.putExtra(Intent.EXTRA_TEXT, Scrub.text(this, text).takeLast(200_000))
         startActivity(Intent.createChooser(intent, getString(R.string.share)))
+    }
+}
+
+/**
+ * Shows what the diagnostics export produced: where the zip is, a Share action
+ * and a copy into Download/PES18, or the reason there is none. Shared by the
+ * launcher, the crash dialog and Settings' Storage card.
+ */
+fun showReportResult(activity: android.app.Activity, done: Diagnostics.Done) {
+    val file = done.zip
+    if (file == null) {
+        AlertDialog.Builder(activity)
+            .setMessage(activity.getString(R.string.diagnostics_export_failed, done.error ?: activity.getString(R.string.unknown_reason)))
+            .setPositiveButton(R.string.close, null)
+            .show()
+        return
+    }
+    val size = android.text.format.Formatter.formatFileSize(activity, done.bytes)
+    val dialog = AlertDialog.Builder(activity)
+        .setMessage(activity.getString(R.string.captures_saved_to, file.absolutePath + " ($size)"))
+        .setPositiveButton(R.string.share) { _, _ -> shareReportFile(activity, file) }
+        .setNeutralButton(R.string.capture_save, null)
+        .setNegativeButton(R.string.close, null)
+        .create()
+    // The copy button is held down while it runs, so a second tap cannot write
+    // the same file twice; the work itself is off the main thread because it
+    // opens and fills a MediaStore row.
+    dialog.setOnShowListener {
+        val save = dialog.getButton(android.content.DialogInterface.BUTTON_NEUTRAL)
+        var saving = false
+        save.setOnClickListener {
+            if (saving) return@setOnClickListener
+            saving = true
+            save.isEnabled = false
+            val context = activity.applicationContext
+            thread(name = "report-save", isDaemon = true) {
+                // Downloads.save answers with null on success and a sentence on
+                // failure, so nothing here has to invent a reason.
+                val problem = try { Downloads.save(context, file) } catch (error: Throwable) {
+                    error.message ?: error.toString()
+                }
+                activity.runOnUiThread {
+                    if (activity.isFinishing || activity.isDestroyed) return@runOnUiThread
+                    saving = false
+                    try { save.isEnabled = true } catch (_: Throwable) {}
+                    val message = if (problem == null)
+                        activity.getString(R.string.captures_saved_to, "Download/PES18/" + file.name)
+                    else problem
+                    Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+    dialog.show()
+}
+
+/**
+ * Hands the exported zip to the share sheet through the provider the export
+ * registers for it (`<package>.diagnostics`), so no storage permission is asked
+ * for and the receiver can read exactly this one file.
+ */
+fun shareReportFile(activity: android.app.Activity, file: File) {
+    try {
+        val uri = FileProvider.getUriForFile(activity, activity.packageName + ".diagnostics", file)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, activity.getString(R.string.diagnostics_share_subject))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        activity.startActivity(Intent.createChooser(send, activity.getString(R.string.share)))
+    } catch (error: Throwable) {
+        Toast.makeText(activity, activity.getString(R.string.capture_failed, error.message ?: ""), Toast.LENGTH_SHORT).show()
     }
 }
 

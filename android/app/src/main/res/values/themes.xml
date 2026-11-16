@@ -11,6 +11,7 @@
         <item name="android:textColorSecondary">@color/pes_muted</item>
         <item name="buttonStyle">@style/PanelButton</item>
         <item name="android:buttonStyle">@style/PanelButton</item>
+        <item name="alertDialogTheme">@style/Theme.PES17.Dialog</item>
         <!-- The app's pages are white: the system bars show dark icons and the
              page colour, so the status bar's time and battery stay readable. -->
         <item name="android:windowLightStatusBar">true</item>
@@ -31,6 +32,71 @@
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:statusBarColor">@android:color/black</item>
         <item name="android:navigationBarColor">@android:color/black</item>
+        <!-- The in-game dialogs are the launcher's: a white panel over the run. -->
+        <item name="alertDialogTheme">@style/Theme.PES17.Dialog</item>
+    </style>
+
+    <!-- Every AlertDialog in the app (both themes point alertDialogTheme here):
+         the white panel with navy type, and buttons that are actually visible on
+         it. Base AlertDialog.AppCompat.Light leaves its borderless buttons with
+         a white label, which is invisible on the white panel. -->
+    <style name="Theme.PES17.Dialog" parent="Theme.AppCompat.Light.Dialog.Alert">
+        <item name="colorPrimary">@color/pes_navy</item>
+        <item name="colorPrimaryDark">@color/pes_navy</item>
+        <item name="colorAccent">@color/pes_red</item>
+        <item name="colorControlActivated">@color/pes_red</item>
+        <item name="android:textColorPrimary">@color/pes_text</item>
+        <item name="android:textColorSecondary">@color/pes_muted</item>
+        <item name="alertDialogStyle">@style/PES17.AlertDialog</item>
+        <item name="buttonBarPositiveButtonStyle">@style/DialogButton</item>
+        <item name="buttonBarNegativeButtonStyle">@style/DialogButtonQuiet</item>
+        <item name="buttonBarNeutralButtonStyle">@style/DialogButtonQuiet</item>
+    </style>
+
+    <!-- The attrs AlertController reads with alertDialogStyle as defStyleAttr. -->
+    <style name="PES17.AlertDialog" parent="AlertDialog.AppCompat.Light">
+        <item name="buttonBarPositiveButtonStyle">@style/DialogButton</item>
+        <item name="buttonBarNegativeButtonStyle">@style/DialogButtonQuiet</item>
+        <item name="buttonBarNeutralButtonStyle">@style/DialogButtonQuiet</item>
+    </style>
+
+    <!-- The confirming action: the app's navy action button. -->
+    <style name="DialogButton" parent="ActionButton">
+        <item name="android:layout_marginStart">4dp</item>
+        <item name="android:layout_marginEnd">4dp</item>
+        <item name="android:minWidth">88dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+    </style>
+
+    <!-- A dialog that has to explain itself above a list of choices. -->
+    <style name="DialogTitle">
+        <item name="android:textColor">@color/pes_navy</item>
+        <item name="android:textSize">18sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+    </style>
+
+    <style name="DialogBody">
+        <item name="android:textColor">@color/pes_text</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:lineSpacingExtra">2dp</item>
+    </style>
+
+    <!-- CANCEL and other ways out: blue capitals, no fill. -->
+    <style name="DialogButtonQuiet" parent="Widget.AppCompat.Button.Borderless">
+        <item name="android:layout_marginStart">4dp</item>
+        <item name="android:layout_marginEnd">4dp</item>
+        <item name="android:minWidth">88dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:textColor">@color/pes_blue</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold|italic</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:stateListAnimator">@null</item>
     </style>
 
     <!-- A settings panel's header row: a solid bar, as the PES 6 menus' header strips. -->
@@ -150,5 +216,40 @@
         <item name="android:fontFamily">sans-serif-condensed</item>
         <item name="android:minHeight">40dp</item>
         <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <!-- PATCHES' actions: a full 48dp target, so a thumb or TalkBack hits it. -->
+    <style name="ActionButton" parent="PanelButton">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+
+    <style name="DangerButton" parent="ActionButton">
+        <item name="android:background">@drawable/bg_button_danger</item>
+        <item name="android:textColor">@color/pes_red</item>
+    </style>
+
+    <style name="QuietButton" parent="Widget.AppCompat.Button.Borderless">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textColor">@color/pes_blue</item>
+        <item name="android:textStyle">bold|italic</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <!-- INSTALLED / INCOMPLETE / NOT INSTALLED, on a navy or red pill. -->
+    <style name="StatusPill">
+        <item name="android:background">@drawable/bg_pill_badge</item>
+        <item name="android:paddingStart">9dp</item>
+        <item name="android:paddingEnd">9dp</item>
+        <item name="android:paddingTop">3dp</item>
+        <item name="android:paddingBottom">3dp</item>
+        <item name="android:textColor">@color/pes_gold</item>
+        <item name="android:textSize">10sp</item>
+        <item name="android:textStyle">bold|italic</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:letterSpacing">0.06</item>
     </style>
 </resources>

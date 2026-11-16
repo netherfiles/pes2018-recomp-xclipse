@@ -52,7 +52,7 @@ object Captures {
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "application/zip"
             putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "PES17 capture ${folder.name}")
+            putExtra(Intent.EXTRA_SUBJECT, "PES18 capture ${folder.name}")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(send, context.getString(R.string.capture_share)).apply {
@@ -62,7 +62,7 @@ object Captures {
     }
 
     /**
-     * Copies the capture's zip to the phone's Downloads folder (Download/PES17/ on Android 10+,
+     * Copies the capture's zip to the phone's Downloads folder (Download/PES18/ on Android 10+,
      * through MediaStore, which needs no permission). Returns where it went, or null on failure.
      */
     fun saveToDownloads(context: Context, folder: File): String? {
@@ -72,17 +72,17 @@ object Captures {
             val values = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.Downloads.DISPLAY_NAME, zip.name)
                 put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/zip")
-                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/PES17")
+                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/PES18")
             }
             val resolver = context.contentResolver
             val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
             resolver.openOutputStream(uri)?.use { out -> zip.inputStream().use { it.copyTo(out) } } ?: return null
-            "Download/PES17/${zip.name}"
+            "Download/PES18/${zip.name}"
         } else {
             val target = File(android.os.Environment.getExternalStoragePublicDirectory(
-                android.os.Environment.DIRECTORY_DOWNLOADS), "PES17").apply { mkdirs() }
+                android.os.Environment.DIRECTORY_DOWNLOADS), "PES18").apply { mkdirs() }
             zip.copyTo(File(target, zip.name), overwrite = true)
-            "Download/PES17/${zip.name}"
+            "Download/PES18/${zip.name}"
         }
     } catch (_: Throwable) {
         null

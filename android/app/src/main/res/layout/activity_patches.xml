@@ -1,0 +1,446 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PATCHES: one page, no tabs. A details header, then the data pack, the
+     edited data and the backups. RESTORE and DELETE never share a row; DELETE
+     is a separate red action below the thing it deletes. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/pes_page">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <include layout="@layout/view_back_bar" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="12dp">
+
+                <!-- details / status header -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_panel"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_panel_title"
+                        android:paddingStart="10dp"
+                        android:paddingTop="5dp"
+                        android:paddingBottom="4dp"
+                        android:text="@string/patches_header_title"
+                        android:textColor="@color/pes_on_dark"
+                        android:textSize="14sp"
+                        android:textStyle="bold|italic"
+                        android:textAllCaps="true"
+                        android:fontFamily="sans-serif-condensed" />
+
+                    <TextView
+                        android:id="@+id/patches_header_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:accessibilityLiveRegion="polite"
+                        android:background="@drawable/bg_setting_row"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="7dp"
+                        android:paddingBottom="6dp"
+                        android:textColor="@color/pes_blue"
+                        android:textSize="13sp"
+                        android:textStyle="bold|italic"
+                        android:textAllCaps="true"
+                        android:fontFamily="sans-serif-condensed" />
+
+                    <TextView
+                        android:id="@+id/patches_header_game"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="8dp"
+                        android:textColor="@color/pes_text"
+                        android:textSize="11sp"
+                        android:lineSpacingExtra="2dp"
+                        android:fontFamily="sans-serif" />
+
+                    <Button
+                        android:id="@+id/patches_select_folder"
+                        style="@style/ActionButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_marginEnd="10dp"
+                        android:layout_marginTop="6dp"
+                        android:layout_marginBottom="2dp"
+                        android:text="@string/entry_select_folder"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/patches_header_system"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="5dp"
+                        android:textColor="@color/pes_muted"
+                        android:textSize="11sp"
+                        android:fontFamily="sans-serif" />
+
+                    <TextView
+                        android:id="@+id/patches_header_note"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingBottom="8dp"
+                        android:text="@string/patches_preview_note" />
+                </LinearLayout>
+
+                <!-- PATCH: the data pack -->
+                <TextView
+                    style="@style/SectionHeading"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/patches_section_patch" />
+
+                <LinearLayout style="@style/SettingGroup">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp">
+
+                        <TextView
+                            android:id="@+id/patch_badge"
+                            style="@style/StatusPill"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:accessibilityLiveRegion="polite" />
+
+                        <TextView
+                            android:id="@+id/patch_name"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:textColor="@color/pes_text"
+                            android:textSize="15sp"
+                            android:textStyle="bold"
+                            android:fontFamily="sans-serif-condensed" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/patch_meta"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+
+                    <TextView
+                        android:id="@+id/patch_stats"
+                        style="@style/SettingLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/patch_none"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_patch_none" />
+
+                    <TextView
+                        android:id="@+id/patch_incomplete"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_patch_incomplete"
+                        android:textColor="@color/pes_red"
+                        android:visibility="gone" />
+
+                    <TextView
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_patch_hint" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/patch_replace"
+                            style="@style/ActionButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/patches_replace" />
+
+                        <Button
+                            android:id="@+id/patch_restore"
+                            style="@style/ActionButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:text="@string/patches_restore" />
+                    </LinearLayout>
+
+                    <Button
+                        android:id="@+id/patch_remove"
+                        style="@style/DangerButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/patches_remove_patch" />
+                </LinearLayout>
+
+                <!-- EDITED DATA: the edit save -->
+                <TextView
+                    style="@style/SectionHeading"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/patches_section_edited" />
+
+                <LinearLayout style="@style/SettingGroup">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp">
+
+                        <TextView
+                            android:id="@+id/edit_badge"
+                            style="@style/StatusPill"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:accessibilityLiveRegion="polite" />
+
+                        <TextView
+                            android:id="@+id/edit_name"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:textColor="@color/pes_text"
+                            android:textSize="15sp"
+                            android:textStyle="bold"
+                            android:fontFamily="sans-serif-condensed" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/edit_meta"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+
+                    <TextView
+                        android:id="@+id/edit_stats"
+                        style="@style/SettingLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/edit_none"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_edit_none" />
+
+                    <TextView
+                        android:id="@+id/edit_incomplete"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_edit_incomplete"
+                        android:textColor="@color/pes_red"
+                        android:visibility="gone" />
+
+                    <TextView
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_edit_hint" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/edit_replace"
+                            style="@style/ActionButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/patches_replace" />
+
+                        <Button
+                            android:id="@+id/edit_restore"
+                            style="@style/ActionButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:text="@string/patches_restore" />
+                    </LinearLayout>
+
+                    <Button
+                        android:id="@+id/edit_remove"
+                        style="@style/DangerButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/patches_remove_edit" />
+                </LinearLayout>
+
+                <!-- RESTORE PREVIOUS: one backup per slot -->
+                <TextView
+                    style="@style/SectionHeading"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/patches_section_restore" />
+
+                <LinearLayout style="@style/SettingGroup">
+
+                    <TextView
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_backup_hint" />
+
+                    <LinearLayout
+                        android:id="@+id/restore_patch_group"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:background="@drawable/bg_setting_row"
+                        android:orientation="vertical"
+                        android:padding="8dp">
+
+                        <TextView
+                            android:id="@+id/restore_patch_name"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/pes_text"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            android:fontFamily="sans-serif-condensed" />
+
+                        <TextView
+                            android:id="@+id/restore_patch_meta"
+                            style="@style/SettingHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content" />
+
+                        <Button
+                            android:id="@+id/restore_patch_action"
+                            style="@style/ActionButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="@string/patches_restore_patch" />
+
+                        <Button
+                            android:id="@+id/restore_patch_delete"
+                            style="@style/DangerButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/patches_delete_backup" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/restore_edit_group"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/bg_setting_row"
+                        android:orientation="vertical"
+                        android:padding="8dp">
+
+                        <TextView
+                            android:id="@+id/restore_edit_name"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/pes_text"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            android:fontFamily="sans-serif-condensed" />
+
+                        <TextView
+                            android:id="@+id/restore_edit_meta"
+                            style="@style/SettingHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content" />
+
+                        <Button
+                            android:id="@+id/restore_edit_action"
+                            style="@style/ActionButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="@string/patches_restore_edit" />
+
+                        <Button
+                            android:id="@+id/restore_edit_delete"
+                            style="@style/DangerButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/patches_delete_backup" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/restore_none"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_backup_none"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="26dp"
+            android:background="@drawable/bg_ticker"
+            android:gravity="center_vertical"
+            android:paddingStart="16dp"
+            android:paddingTop="2dp"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:text="@string/patches_help_strip"
+            android:textColor="@color/pes_on_dark"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif-condensed" />
+    </LinearLayout>
+</FrameLayout>

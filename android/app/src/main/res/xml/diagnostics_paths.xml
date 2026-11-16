@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The diagnostics ZIP (Diagnostics.kt), exposed to the share sheet only.
+
+  Both roots are listed because the export falls back to internal storage when
+  the phone has no external files volume, and the share has to work either way.
+
+  The names differ on purpose: androidx FileProvider keys its roots by name, so
+  two roots both called "diagnostics" would collapse into one, and the ZIP in
+  the other location would then be unshareable. That is exactly the phone this
+  report is for.
+-->
+<paths>
+    <external-files-path name="diagnostics" path="diagnostics/" />
+    <files-path name="diagnostics-internal" path="diagnostics/" />
+</paths>

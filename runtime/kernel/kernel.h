@@ -125,6 +125,9 @@ namespace kernel
     void MountDevice(const std::string& name, const std::filesystem::path& root);
     void UnmountDevice(const std::string& name);
     const std::filesystem::path& SaveRoot();
+    // Content packages mounted as DLC (FreeDlc*/mntLIVE*/LIVE*), kept apart
+    // from the saves so the app's save backup does not copy gigabytes of DLC.
+    const std::filesystem::path& DlcRoot();
     // What is kept under a player's number -- his rank, offline and Live, and
     // the settings of a profile at the second to fourth controllers -- renamed
     // to another number, where that one has none yet (kernel/xam.cpp).

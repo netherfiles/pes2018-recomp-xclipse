@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Settings > GAME FILES: the read-only patch summary and the storage rows.
+  Kept out of strings.xml so this screen owns its own text.
+-->
+<resources>
+
+    <string name="settings_row_patch">PATCH</string>
+    <string name="settings_row_edited">EDITED DATA</string>
+    <string name="settings_row_previous">PREVIOUS</string>
+    <string name="settings_row_title">%1$s \u2014 %2$s</string>
+
+    <string name="settings_change_folder">Change game folder</string>
+    <string name="settings_install_hint">Copies the game\'s files from your own disc image or an extracted folder into the app. About 7 GB of free space is wanted.</string>
+
+    <string name="patch_summary_none">None \u2014 install from PATCHES</string>
+    <string name="patch_summary_hand">Found in game folder</string>
+    <string name="patch_summary_stale">Changed in the game folder</string>
+    <string name="patch_summary_stats_dp">%1$d CPK \u00b7 %2$s \u00b7 DpFileList %3$s, %4$d entries</string>
+    <string name="patch_summary_stats_no_dp">%1$d CPK \u00b7 %2$s \u00b7 no DpFileList</string>
+    <string name="edit_summary_none">None installed.</string>
+    <string name="edit_summary_stats">%1$s \u00b7 %2$s \u00b7 v%3$d \u00b7 %4$s players \u00b7 %5$d teams \u00b7 %6$s</string>
+    <string name="previous_none">None kept.</string>
+    <string name="previous_patch_line">Patch: %1$s \u00b7 %2$s \u00b7 %3$s</string>
+    <string name="previous_edit_line">Edited: %1$s \u00b7 %2$s \u00b7 %3$s</string>
+    <string name="settings_section_patches">Patches (read only)</string>
+    <string name="patches_summary_hint">Install, restore and remove data packs on the PATCHES screen.</string>
+
+    <string name="storage_measuring">Measuring\u2026</string>
+    <string name="storage_unavailable">No game folder chosen yet; sizes appear once one is.</string>
+    <string name="storage_row_game">Game files</string>
+    <string name="storage_row_patch_data">Patch data (dlc)</string>
+    <string name="storage_row_saves">Saves</string>
+    <string name="storage_row_system">System save (game-managed)</string>
+    <string name="storage_row_save_backups">Save backups</string>
+    <string name="storage_row_patch_backups">Patch backups</string>
+    <string name="storage_row_staging">Staging (leftover install)</string>
+    <string name="storage_row_app_data">App data (shaders, logs, captures)</string>
+    <string name="storage_row_free">Free space</string>
+    <string name="storage_note">Sizes are measured in the background. Free space is what the storage holding the game folder reports.</string>
+
+</resources>

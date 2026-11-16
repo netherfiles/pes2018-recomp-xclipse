@@ -831,6 +831,15 @@
 
                 </LinearLayout>
 
+                <!-- Read-only: the runtime's switches are named PES17_* and are
+                     read from the environment or the switch files, not here. -->
+                <TextView
+                    style="@style/SettingHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/advanced_switches_note" />
+
             </LinearLayout>
 
             <!-- GAME FILES: where the game is, the saves, what the app keeps. -->
@@ -873,11 +882,24 @@
                         android:text="@string/allow_storage" />
 
                     <Button
+                        android:id="@+id/install_game"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/install_game" />
+
+                    <TextView
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_install_hint" />
+
+                    <Button
                         android:id="@+id/change_folder"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="6dp"
-                        android:text="@string/entry_select_folder" />
+                        android:text="@string/settings_change_folder" />
 
                     <Button
                         android:id="@+id/forget"
@@ -932,6 +954,75 @@
 
                 </LinearLayout>
 
+                <!-- PATCHES: what is installed, read-only. The actions stay on
+                     the PATCHES screen; nothing here can remove or restore. -->
+
+                <TextView
+                    style="@style/SectionHeading"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_section_patches" />
+
+                <LinearLayout style="@style/SettingGroup">
+
+                    <TextView
+                        android:id="@+id/patch_state"
+                        style="@style/SettingLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-serif-condensed"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/patch_detail"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/pes_text"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/edit_state"
+                        style="@style/SettingLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:fontFamily="sans-serif-condensed"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/edit_detail"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/pes_text"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/previous_state"
+                        style="@style/SettingLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:fontFamily="sans-serif-condensed"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/previous_detail"
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/pes_text"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/patches_summary_hint" />
+
+                </LinearLayout>
+
                 <TextView
                     style="@style/SectionHeading"
                     android:layout_width="match_parent"
@@ -947,6 +1038,12 @@
                         android:layout_height="wrap_content"
                         android:textColor="@color/pes_text"
                         android:textSize="12sp" />
+
+                    <TextView
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/storage_note" />
 
                     <Button
                         android:id="@+id/clear_shaders"
@@ -968,6 +1065,14 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="6dp"
                         android:text="@string/captures_open" />
+
+                    <Button
+                        android:id="@+id/export_diagnostics"
+                        style="@style/ActionButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/diagnostics_export_button" />
 
                 </LinearLayout>
 

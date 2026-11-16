@@ -24,8 +24,13 @@
     <!-- The run's process has to stay wanted while the game is up, and for a
          process nobody is looking at a foreground service is the only way to
          say so (GameService.kt). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- The patch importer stages and swaps several GB in a dataSync service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Its progress notification, on Android 13 and later. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.vulkan.version"
         android:version="0x400000" android:required="true" />
@@ -138,6 +143,43 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
             tools:ignore="DiscouragedApi,LockedOrientationActivity" />
 
+        <!-- Choosing the folder the game runs from: the system picker, the
+             all-files permission and the check for default.xex. The launcher
+             and Settings both start it for a result (RESULT_OK + EXTRA_PATH). -->
+        <activity
+            android:name=".GameFolderActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="fullUser"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity" />
+
+        <!-- The patch, the edited data and the backups, on one page. -->
+        <activity
+            android:name=".PatchesActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="fullUser"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity" />
+
+        <!-- The import wizard: source, scan, peak space, progress, result. -->
+        <activity
+            android:name=".PatchImportActivity"
+            android:exported="false"
+            android:parentActivityName=".PatchesActivity"
+            android:launchMode="singleTop"
+            android:screenOrientation="fullUser"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity" />
+
+        <!-- The importer's long work: staging, verification and the swap. It
+             lives in the launcher process so activity death cannot stop it. -->
+        <service
+            android:name=".PatchInstallService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <activity
             android:name=".FileBrowserActivity"
             android:exported="false"
@@ -154,6 +196,20 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/capture_paths" />
+        </provider>
+
+        <!-- The diagnostics ZIP (Diagnostics.kt), shared the same way but
+             through its own authority: a report is not a capture, and the two
+             path sets stay separate so neither can reach the other's folder.
+             Its roots are the external and internal diagnostics folders. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.diagnostics"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/diagnostics_paths" />
         </provider>
     </application>
 </manifest>

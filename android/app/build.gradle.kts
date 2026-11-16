@@ -51,7 +51,7 @@ android {
     defaultConfig {
         applicationId = "com.pes2018.recomp"
         // A build with its own package (PES17_APP_ID_SUFFIX=diag gives
-        // com.pes2018.recomp.diag) installs beside the release instead of over
+        // com.pes2017.recomp.diag) installs beside the release instead of over
         // it, which is what a diagnostic build next to a working one wants.
         setting("PES17_APP_ID_SUFFIX")?.let { applicationIdSuffix = ".$it" }
         // Android 8.0. AAudio, ASurfaceControl-free presenting, and the
@@ -110,7 +110,7 @@ android {
         }
     }
 
-    // One executable, one app: PES 2018 is installed from the disc as it is.
+    // One executable, one app: PES 2017 is installed from the disc as it is.
     defaultConfig {
         resValue("string", "app_name", "PES 2018")
     }
@@ -190,4 +190,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // libarchive 3.8.1. 1.1.6 is the last release whose arm64 .so is built
+    // for 16 KB pages; 1.1.7 needs compileSdk 37.
+    implementation("me.zhanghai.android.libarchive:library:1.1.6")
+
+    testImplementation("junit:junit:4.13.2")
 }

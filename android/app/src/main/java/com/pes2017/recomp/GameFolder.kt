@@ -74,8 +74,7 @@ object GameFolder {
         }
         candidates += File(context.filesDir, "game")
         val names = listOf(
-            "PES2018", "PES 2018", "PES18", "pes2018", "pes18", "PES_2018", "Pro Evolution Soccer 2018",
-            "PES2017", "PES 2017", "PES17", "pes2017", "pes17", "PES_2017", "Pro Evolution Soccer 2017",
+            "PES2018", "PES 2018", "PES18", "pes2018", "pes18", "PES_2018", "Pro Evolution Soccer 2018"
         )
         if (hasAccess(context)) {
             val roots = listOf(

@@ -75,6 +75,7 @@ namespace
         bool isDirectory = false;
         bool writable = false;
         bool deleteOnClose = false;
+        size_t directoryIndex = 0;   // next entry NtQueryDirectoryFile returns
         std::mutex lock;
 
         const char* TypeName() const override { return "file"; }
@@ -254,7 +255,15 @@ namespace
 
         fs::path resolved;
         bool existed = false;
-        if (!writable && !relative.empty())
+        if (relative.empty())
+        {
+            // A device root is a directory. The title opens FreeDlc000:\ to
+            // find out whether the mounted free-DLC package exists; treating
+            // the empty name as a missing file made it skip the package.
+            resolved = root;
+            existed = true;
+        }
+        else if (!writable)
         {
             static const fs::path modDir = [] {
                 if (const char* envMod = env::Text("PES17_MOD_DIR"))
@@ -574,6 +583,185 @@ PPC_FUNC(__imp__NtQueryFullAttributesFile)
         p[5] = size;
         *GuestPtr<be32>(ctx.r4.u32 + 48) = dir ? 0x10u : 0x80u;  // DIRECTORY / NORMAL
     }
+    ctx.r3.u64 = X_STATUS_SUCCESS;
+}
+
+namespace
+{
+    bool MatchName(const std::string& name, const std::string& pattern)
+    {
+        if (pattern.empty() || pattern == "*") return true;
+        size_t n = 0, p = 0, star = std::string::npos, mark = 0;
+        while (n < name.size())
+        {
+            if (p < pattern.size() &&
+                (pattern[p] == '?' ||
+                 std::tolower(static_cast<unsigned char>(pattern[p])) ==
+                     std::tolower(static_cast<unsigned char>(name[n]))))
+            {
+                n++;
+                p++;
+            }
+            else if (p < pattern.size() && pattern[p] == '*')
+            {
+                star = p++;
+                mark = n;
+            }
+            else if (star != std::string::npos)
+            {
+                p = star + 1;
+                n = ++mark;
+            }
+            else return false;
+        }
+        while (p < pattern.size() && pattern[p] == '*') p++;
+        return p == pattern.size();
+    }
+
+    void Put32(std::vector<uint8_t>& b, uint32_t v)
+    {
+        b.push_back(uint8_t(v >> 24));
+        b.push_back(uint8_t(v >> 16));
+        b.push_back(uint8_t(v >> 8));
+        b.push_back(uint8_t(v));
+    }
+
+    void Put64(std::vector<uint8_t>& b, uint64_t v)
+    {
+        for (int i = 7; i >= 0; i--) b.push_back(uint8_t(v >> (i * 8)));
+    }
+}
+
+PPC_FUNC(__imp__NtQueryDirectoryFile)
+{
+    auto file = std::dynamic_pointer_cast<FileObject>(LookupHandle(ctx.r3.u32));
+    auto* iosb = GuestPtr<XIoStatusBlock>(ctx.r7.u32);
+    const uint32_t buffer = ctx.r8.u32;
+    const uint32_t length = ctx.r9.u32;
+    const uint32_t namePtr = ctx.r10.u32;
+    const uint32_t rawClass = kernel::StackArgument(ctx, 8);
+    // The title calls the 8-argument kernel variant: FileInformationClass,
+    // ReturnSingleEntry and RestartScan are absent, so 0 means the kernel's
+    // default layout, FileDirectoryInformation.
+    const uint32_t infoClass = rawClass == 0 ? 1u : rawClass;
+    // With the 8-argument variant the two stack slots are not arguments; the
+    // kernel's defaults are a full listing from the beginning.
+    const uint32_t single = rawClass == 0 ? 0u : kernel::StackArgument(ctx, 9);
+    const uint32_t restart = rawClass == 0 ? 0u : kernel::StackArgument(ctx, 10);
+    constexpr uint32_t kNoMoreFiles = 0x80000006, kBufferOverflow = 0x80000005;
+
+    LOGK("dirquery: handle %08X raw %u class %u single %u restart %u buf %08X len %u name %08X",
+         ctx.r3.u32, rawClass, infoClass, single, restart, buffer, length, namePtr);
+
+    if (!file || !file->isDirectory || !buffer || length < 12)
+    {
+        if (iosb) { iosb->status = X_STATUS_INVALID_PARAMETER; iosb->information = 0; }
+        ctx.r3.u64 = X_STATUS_INVALID_PARAMETER;
+        return;
+    }
+    if (infoClass != 1 && infoClass != 2 && infoClass != 3 && infoClass != 12 &&
+        infoClass != 37 && infoClass != 38)
+    {
+        if (iosb) { iosb->status = X_STATUS_INVALID_PARAMETER; iosb->information = 0; }
+        ctx.r3.u64 = X_STATUS_INVALID_PARAMETER;
+        return;
+    }
+
+    std::string pattern;
+    if (namePtr)
+    {
+        const uint32_t text = *GuestPtr<be32>(namePtr + 4);
+        if (text)
+        {
+            const char* p = reinterpret_cast<const char*>(guest::Base() + text);
+            size_t n = 0;
+            while (n < 128 && p[n]) n++;
+            pattern.assign(p, n);
+        }
+    }
+
+    // One directory listing, sorted, then the part the caller has not seen.
+    std::vector<std::pair<std::string, fs::path>> entries;
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(file->path, ec))
+    {
+        std::string name = e.path().filename().string();
+        if (MatchName(name, pattern)) entries.emplace_back(std::move(name), e.path());
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    if (restart) file->directoryIndex = 0;
+
+    std::vector<uint8_t> out;
+    std::vector<size_t> starts;
+    size_t count = 0;
+    for (size_t i = file->directoryIndex; i < entries.size(); i++)
+    {
+        const std::string& name = entries[i].first;
+        std::vector<uint8_t> uname;
+        for (unsigned char c : name) { uname.push_back(0); uname.push_back(c); }  // UTF-16BE
+
+        const size_t header = infoClass == 12 ? 12 : infoClass == 37 ? 0x66 : infoClass == 38 ? 0x4C :
+                              infoClass == 3 ? 0x5E : infoClass == 2 ? 0x44 : 0x40;
+        const size_t padded = (header + uname.size() + 3) & ~size_t(3);
+        if (out.size() + padded > length) break;
+
+        starts.push_back(out.size());
+        Put32(out, 0);              // NextEntryOffset, patched after the loop
+        Put32(out, 0);              // FileIndex
+        if (infoClass != 12)
+        {
+            for (int t = 0; t < 4; t++) Put64(out, 0);      // timestamps
+            uint64_t size = 0;
+            if (!fs::is_directory(entries[i].second, ec)) size = fs::file_size(entries[i].second, ec);
+            Put64(out, size);       // EndOfFile
+            Put64(out, size);       // AllocationSize
+            Put32(out, 0x20);       // FILE_ATTRIBUTE_ARCHIVE
+            Put32(out, uint32_t(uname.size()));
+            if (infoClass == 2 || infoClass == 3 || infoClass == 37 || infoClass == 38)
+                Put32(out, 0);                              // EaSize
+            if (infoClass == 3 || infoClass == 37)
+            {
+                out.push_back(0);                           // ShortNameLength
+                out.push_back(0);                           // align ShortName
+                for (int c = 0; c < 24; c++) out.push_back(0);  // WCHAR ShortName[12]
+            }
+            if (infoClass == 37 || infoClass == 38) Put64(out, 0);  // FileId
+        }
+        else
+        {
+            Put32(out, uint32_t(uname.size()));
+        }
+        out.insert(out.end(), uname.begin(), uname.end());
+        while (out.size() % 4) out.push_back(0);
+
+        count++;
+        if (single) break;
+    }
+
+    if (count == 0)
+    {
+        if (iosb) { iosb->status = kNoMoreFiles; iosb->information = 0; }
+        ctx.r3.u64 = kNoMoreFiles;
+        return;
+    }
+
+    // Patch each entry's NextEntryOffset to the next start; the last is zero.
+    for (size_t k = 0; k < starts.size(); k++)
+    {
+        const uint32_t next = (k + 1 < starts.size()) ? uint32_t(starts[k + 1] - starts[k]) : 0u;
+        out[starts[k] + 0] = uint8_t(next >> 24);
+        out[starts[k] + 1] = uint8_t(next >> 16);
+        out[starts[k] + 2] = uint8_t(next >> 8);
+        out[starts[k] + 3] = uint8_t(next);
+    }
+
+    LOGK("dirquery: handle %08X class %u single %u restart %u pattern '%s' -> %zu entries, %zu bytes",
+         ctx.r3.u32, infoClass, single, restart, pattern.c_str(), count, out.size());
+    std::memcpy(guest::Base() + buffer, out.data(), out.size());
+    file->directoryIndex += count;
+    if (iosb) { iosb->status = X_STATUS_SUCCESS; iosb->information = uint32_t(out.size()); }
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 

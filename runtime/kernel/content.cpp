@@ -129,6 +129,14 @@ const fs::path& kernel::SaveRoot()
     return root;
 }
 
+const fs::path& kernel::DlcRoot()
+{
+    // The console's Content/<title>/<package> tree, extracted; not a save, so
+    // the app's save backup must not walk it.
+    static const fs::path root = fs::path("dlc");
+    return root;
+}
+
 // Memcard_InitializeSystem. The table is clear when it returns, so this is the
 // moment to answer the question the prompt would ask.
 #ifdef T_Memcard_InitializeSystem
@@ -206,7 +214,12 @@ PPC_FUNC(__imp__XamContentCreateEx)
          unsigned(*GuestPtr<be32>(contentData + kContentType)), licenseOut, overlapped);
     const uint32_t type = *GuestPtr<be32>(contentData + kContentType);
     const uint32_t device = *GuestPtr<be32>(contentData + kContentDeviceId);
-    const fs::path package = SaveRoot() / file;
+    // The title mounts its free DLC as FreeDlc000: and its LIVE DLC as
+    // mntLIVE00000000:. Both are content packages and live under dlc/, while
+    // savedgame: keeps the same file name in saves/.
+    const bool dlc = drive.rfind("FreeDlc", 0) == 0 || drive.rfind("mntLIVE", 0) == 0 ||
+                     drive.rfind("LIVE", 0) == 0;
+    const fs::path package = (dlc ? DlcRoot() : SaveRoot()) / file;
     std::error_code ec;
     const bool existed = fs::is_directory(package, ec);
 

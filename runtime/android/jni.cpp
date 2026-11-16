@@ -316,7 +316,15 @@ PES17_NATIVE(void, nativeSetOption)(JNIEnv* env, jobject, jstring key, jstring v
     if (name.empty()) return;
     if (text.empty()) unsetenv(name.c_str());
     else setenv(name.c_str(), text.c_str(), 1);
-    LOGI("android: %s=%s", name.c_str(), text.c_str());
+
+    // The app sends its settings one call at a time -- forty of them in a
+    // row before the first frame, half of them cache paths -- so each line
+    // is a trace and the log carries the count instead. A reader looking
+    // for what the app set adds PES17_LOG_ALL=1 or reads logcat.
+    static std::atomic<int> options{0};
+    const int count = ++options;
+    LOGK("android: %s=%s", name.c_str(), text.c_str());
+    if (count % 16 == 0) LOGI("android: options: %d set", count);
 }
 
 PES17_NATIVE(void, nativeSelectDriver)(JNIEnv* env, jobject, jstring directory, jstring library)

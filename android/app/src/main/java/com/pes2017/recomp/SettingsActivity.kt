@@ -8,6 +8,9 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import com.pes2017.recomp.patch.PatchFormat
+import com.pes2017.recomp.patch.PatchesDashboard
+import com.pes2017.recomp.patch.SlotSize
 import kotlin.math.roundToInt
 
 /**
@@ -31,6 +34,19 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var storageAccess: TextView
     private lateinit var grantStorage: Button
     private lateinit var savesSummary: TextView
+    private lateinit var paths: TextView
+
+    // The patch summary and the storage rows, measured off the main thread.
+    private lateinit var patchState: TextView
+    private lateinit var patchDetail: TextView
+    private lateinit var editState: TextView
+    private lateinit var editDetail: TextView
+    private lateinit var previousState: TextView
+    private lateinit var previousDetail: TextView
+    private lateinit var storageText: TextView
+
+    /** A diagnostics report is being written: the button stays down until it answers. */
+    private var exporting = false
 
     // Save backups (SaveBackup): written where the player picks, read from a file they pick.
     private val createBackup = registerForActivityResult(
@@ -39,6 +55,20 @@ class SettingsActivity : AppCompatActivity() {
     private val openBackup = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) confirmRestore { contentResolver.openInputStream(uri) } }
+
+    /**
+     * GameFolderActivity writes prefs.gameDirectory before it returns, so the
+     * result is only "a folder was taken": redraw the paths and measure again.
+     */
+    private val folderPicker = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            paths.text = pathsText()
+            refreshStorageAccess()
+            refreshDashboard(force = true)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,7 +166,7 @@ class SettingsActivity : AppCompatActivity() {
         switch(R.id.developer_tools, prefs.developerTools) { prefs.developerTools = it; showTesting(it) }
 
         // ---- the game files ----
-        val paths: TextView = findViewById(R.id.paths)
+        paths = findViewById(R.id.paths)
         storageAccess = findViewById(R.id.storage_access)
         grantStorage = findViewById(R.id.grant_storage)
         grantStorage.setOnClickListener {
@@ -154,10 +184,13 @@ class SettingsActivity : AppCompatActivity() {
                 requestPermissions(GameFolder.legacyPermissions, 1)
             }
         }
+        findViewById<Button>(R.id.install_game).setOnClickListener {
+            startActivity(Intent(this, InstallActivity::class.java))
+        }
         findViewById<Button>(R.id.change_folder).setOnClickListener {
-            // The folder picker lives in the main menu, where the permission
-            // flow and the check of default.xex are.
-            finish()
+            // The picker checks default.xex and writes prefs.gameDirectory; the
+            // result only says whether a folder was taken.
+            folderPicker.launch(Intent(this, GameFolderActivity::class.java))
         }
         findViewById<Button>(R.id.forget).setOnClickListener {
             AlertDialog.Builder(this)
@@ -167,6 +200,7 @@ class SettingsActivity : AppCompatActivity() {
                 .setPositiveButton(R.string.reset) { _, _ ->
                     prefs.gameDirectory = ""
                     paths.text = getString(R.string.paths_none)
+                    refreshDashboard(force = true)
                 }
                 .show()
         }
@@ -180,32 +214,92 @@ class SettingsActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.restore_saves).setOnClickListener { chooseRestore() }
 
-        // ---- storage ----
-        val storage: TextView = findViewById(R.id.storage)
-        refreshStorage(storage)
+        // ---- the patch summary and the storage: read from the cached snapshot
+        // at once, then measured once per resume by PatchesDashboard. ----
+        patchState = findViewById(R.id.patch_state)
+        patchDetail = findViewById(R.id.patch_detail)
+        editState = findViewById(R.id.edit_state)
+        editDetail = findViewById(R.id.edit_detail)
+        previousState = findViewById(R.id.previous_state)
+        previousDetail = findViewById(R.id.previous_detail)
+        storageText = findViewById(R.id.storage)
+        val cached = PatchesDashboard.cached()
+        if (cached != null) render(cached) else renderMeasuring()
+
         findViewById<Button>(R.id.clear_shaders).setOnClickListener {
             shaderCacheFiles().forEach { try { it.delete() } catch (_: Throwable) {} }
-            storage.text = getString(R.string.shaders_cleared)
-            refreshStorage(storage)
+            android.widget.Toast.makeText(this, R.string.shaders_cleared, android.widget.Toast.LENGTH_SHORT).show()
+            refreshDashboard(force = true)
         }
         findViewById<Button>(R.id.manage_captures).setOnClickListener {
             startActivity(Intent(this, CapturesActivity::class.java))
         }
-        findViewById<Button>(R.id.clear_logs).setOnClickListener {
-            listOf("game.log", "launcher.log", "last-crash-game.txt", "last-crash-launcher.txt").forEach {
-                try {
-                    java.io.File(filesDir, it).delete()
-                } catch (_: Throwable) {
-                }
-            }
-            storage.text = getString(R.string.logs_cleared)
-            refreshStorage(storage)
+        findViewById<Button>(R.id.export_diagnostics).setOnClickListener {
+            exportDiagnostics(it as Button)
         }
+        findViewById<Button>(R.id.clear_logs).setOnClickListener { clearLogs() }
     }
 
     override fun onResume() {
         super.onResume()
-        // Back from the permission screen.
+        // Back from the permission screen, the folder picker or the installer.
+        refreshStorageAccess()
+        paths.text = pathsText()
+        refreshDashboard()
+        // An export that finished after its dialog was gone: say where the zip
+        // went, once, then take the note down so it is not said again.
+        Diagnostics.lastExport(this)?.let {
+            android.widget.Toast.makeText(
+                this, getString(R.string.captures_saved_to, it), android.widget.Toast.LENGTH_LONG,
+            ).show()
+            Diagnostics.clearLastExport(this)
+        }
+    }
+
+    /**
+     * The same report the LOG screen writes: a zip of the logs, the last crash,
+     * the device and the settings. Nothing to say about it here, so the note is
+     * empty; the export walks every log file, so the button is held down while
+     * it is written.
+     */
+    private fun exportDiagnostics(button: Button) {
+        if (exporting) return
+        exporting = true
+        button.isEnabled = false
+        Diagnostics.export(this, "") { done ->
+            runOnUiThread {
+                exporting = false
+                try { button.isEnabled = true } catch (_: Throwable) {}
+                if (!isFinishing && !isDestroyed) showReportResult(this, done)
+            }
+        }
+    }
+
+    /**
+     * Everything the app writes into its own folder, the rotated (.1) runs and
+     * the event logs included, so the next start begins with an empty log.
+     * crash-history is kept: a crash deleted here is a crash nobody can report.
+     */
+    private fun clearLogs() {
+        for (name in listOf(
+            "game.log", "game.log.1", "launcher.log", "launcher.log.1",
+            "events-launcher.txt", "events-launcher.txt.1",
+            "events-game.txt", "events-game.txt.1",
+        )) {
+            try { java.io.File(filesDir, name).delete() } catch (_: Throwable) {}
+        }
+        try {
+            filesDir.listFiles()?.filter { it.isFile && it.name.startsWith("last-crash-") && it.name.endsWith(".txt") }
+                ?.forEach { try { it.delete() } catch (_: Throwable) {} }
+        } catch (_: Throwable) {}
+        // Written after the clear, so the report says the player asked for it
+        // rather than looking like the logs went missing on their own.
+        EventLog.note(this, "logs.cleared")
+        android.widget.Toast.makeText(this, R.string.logs_cleared, android.widget.Toast.LENGTH_SHORT).show()
+        refreshDashboard(force = true)
+    }
+
+    private fun refreshStorageAccess() {
         val granted = GameFolder.hasAccess(this)
         storageAccess.setText(if (granted) R.string.storage_granted else R.string.storage_not_granted)
         grantStorage.visibility = if (granted) android.view.View.GONE else android.view.View.VISIBLE
@@ -375,49 +469,149 @@ class SettingsActivity : AppCompatActivity() {
         )
     }
 
-    private fun refreshStorage(view: TextView) {
-        view.text = getString(R.string.storage_computing)
-        Thread {
-            fun sizeOf(dir: java.io.File): Long = try {
-                if (dir.isFile) dir.length()
-                else dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-            } catch (_: Throwable) {
-                0L
-            }
-            val gameDir = prefs.gameDirectory.ifEmpty { null }?.let { java.io.File(it) }
-            val base = gameBase()
-            val saves = java.io.File(
-                (gameDir?.parent ?: base.absolutePath) + "/saves",
-            )
-            val rows = listOf(
-                getString(R.string.section_files) to (gameDir?.let { sizeOf(it) } ?: 0L),
-                getString(R.string.saves_files) to sizeOf(saves),
-                getString(R.string.clear_shaders) to shaderCacheFiles().sumOf {
-                    try {
-                        it.length()
-                    } catch (_: Throwable) {
-                        0L
-                    }
-                },
-                getString(R.string.view_log) to listOf(
-                    "game.log", "launcher.log", "last-crash-game.txt", "last-crash-launcher.txt",
-                ).sumOf {
-                    try {
-                        java.io.File(filesDir, it).length()
-                    } catch (_: Throwable) {
-                        0L
-                    }
-                },
-            )
-            val text = rows.joinToString("\n") { (label, bytes) ->
-                getString(R.string.storage_line, label, formatSize(bytes))
-            }
-            runOnUiThread { view.text = text }
-        }.start()
+    /**
+     * Cached snapshot first (an instant paint), then one measurement per
+     * resume. [force] is for the moments that change the folder itself: a
+     * chosen folder, a forgotten one, a cleared cache. The callback is dropped
+     * if the screen is gone, so a slow 19 GB walk cannot touch dead views.
+     */
+    private fun refreshDashboard(force: Boolean = false) {
+        PatchesDashboard.cached()?.let(::render)
+        val onResult: (PatchesDashboard.Snapshot) -> Unit = { snapshot ->
+            if (!isFinishing && !isDestroyed) render(snapshot)
+        }
+        if (force) PatchesDashboard.refresh(this, onResult)
+        else PatchesDashboard.load(this, onResult = onResult)
     }
 
-    private fun formatSize(bytes: Long): String =
-        android.text.format.Formatter.formatFileSize(this, bytes)
+    private fun render(snapshot: PatchesDashboard.Snapshot) {
+        renderPatch(snapshot.state.patch)
+        renderEdited(snapshot.state.edited)
+        renderPrevious(snapshot.state)
+        renderStorage(snapshot)
+    }
+
+    /** Before the first snapshot: the measurement has not finished yet. */
+    private fun renderMeasuring() {
+        rowTitle(patchState, R.string.settings_row_patch, null, R.color.pes_muted)
+        patchDetail.text = getString(R.string.storage_measuring)
+        rowTitle(editState, R.string.settings_row_edited, null, R.color.pes_muted)
+        editDetail.text = getString(R.string.storage_measuring)
+        rowTitle(previousState, R.string.settings_row_previous, null, R.color.pes_text)
+        previousDetail.text = getString(R.string.storage_measuring)
+        storageText.text = getString(R.string.storage_measuring)
+    }
+
+    private fun renderPatch(patch: PatchesRepository.PatchData?) {
+        if (patch == null) {
+            rowTitle(patchState, R.string.settings_row_patch, getString(R.string.patches_status_none), R.color.pes_muted)
+            patchDetail.text = getString(R.string.patch_summary_none)
+            return
+        }
+        if (patch.complete) {
+            rowTitle(patchState, R.string.settings_row_patch, getString(R.string.patches_status_installed), R.color.pes_blue)
+        } else {
+            rowTitle(patchState, R.string.settings_row_patch, getString(R.string.patches_status_incomplete), R.color.pes_red)
+        }
+        val meta = listOf(patch.name, patch.sourceLabel, patch.date)
+            .filter { it.isNotBlank() }
+            .joinToString(" \u00b7 ")
+        val stats = if (patch.dpBytes > 0) {
+            getString(
+                R.string.patch_summary_stats_dp,
+                patch.cpk, PatchFormat.formatBytes(patch.bytes),
+                PatchFormat.formatBytes(patch.dpBytes), patch.entries,
+            )
+        } else {
+            getString(R.string.patch_summary_stats_no_dp, patch.cpk, PatchFormat.formatBytes(patch.bytes))
+        }
+        // The provenance note never claims a source the app cannot know.
+        val note = when (patch.provenance) {
+            PatchesRepository.Provenance.HAND -> getString(R.string.patch_summary_hand)
+            PatchesRepository.Provenance.STALE -> getString(R.string.patch_summary_stale)
+            PatchesRepository.Provenance.APP -> null
+        }
+        patchDetail.text = listOfNotNull(meta, stats, note).joinToString("\n")
+    }
+
+    private fun renderEdited(edited: PatchesRepository.EditedData?) {
+        if (edited == null) {
+            rowTitle(editState, R.string.settings_row_edited, getString(R.string.patches_status_none), R.color.pes_muted)
+            editDetail.text = getString(R.string.edit_summary_none)
+            return
+        }
+        if (edited.complete) {
+            rowTitle(editState, R.string.settings_row_edited, getString(R.string.patches_status_installed), R.color.pes_blue)
+        } else {
+            rowTitle(editState, R.string.settings_row_edited, getString(R.string.patches_status_incomplete), R.color.pes_red)
+        }
+        editDetail.text = getString(
+            R.string.edit_summary_stats,
+            edited.name, edited.fileName, edited.version,
+            PatchFormat.formatCount(edited.players.toLong()), edited.teams,
+            PatchFormat.formatBytes(edited.bytes),
+        )
+    }
+
+    private fun renderPrevious(state: PatchesRepository.State) {
+        rowTitle(previousState, R.string.settings_row_previous, null, R.color.pes_text)
+        val lines = mutableListOf<String>()
+        state.patchBackup?.let {
+            lines.add(
+                getString(
+                    R.string.previous_patch_line,
+                    it.name, it.date, PatchFormat.formatBytes(it.bytes),
+                ),
+            )
+        }
+        state.editBackup?.let {
+            lines.add(
+                getString(
+                    R.string.previous_edit_line,
+                    it.name, it.date, PatchFormat.formatBytes(it.bytes),
+                ),
+            )
+        }
+        previousDetail.text =
+            if (lines.isEmpty()) getString(R.string.previous_none) else lines.joinToString("\n")
+    }
+
+    private fun renderStorage(snapshot: PatchesDashboard.Snapshot) {
+        val facts = snapshot.storage
+        if (facts == null) {
+            storageText.text = getString(R.string.storage_unavailable)
+            return
+        }
+        val appData = SlotSize.safeAdd(
+            facts.shaders.bytes,
+            SlotSize.safeAdd(facts.logs.bytes, facts.captures.bytes),
+        )
+        val rows = listOf(
+            R.string.storage_row_game to facts.game.bytes,
+            R.string.storage_row_patch_data to facts.dlc.bytes,
+            R.string.storage_row_saves to facts.saves.bytes,
+            // The game recreates SYSTEM00000000 on every boot; the size is a
+            // fact, who last wrote it is not claimed here.
+            R.string.storage_row_system to snapshot.state.systemSaveBytes,
+            R.string.storage_row_save_backups to facts.saveBackups.bytes,
+            R.string.storage_row_patch_backups to facts.patchBackups.bytes,
+            R.string.storage_row_staging to facts.staging.bytes,
+            R.string.storage_row_app_data to appData,
+            R.string.storage_row_free to facts.freeBytes,
+        )
+        storageText.text = rows.joinToString("\n") { (label, bytes) ->
+            getString(R.string.storage_line, getString(label), PatchFormat.formatBytes(bytes))
+        }
+    }
+
+    private fun rowTitle(view: TextView, label: Int, status: String?, color: Int) {
+        view.text = if (status == null) {
+            getString(label)
+        } else {
+            getString(R.string.settings_row_title, getString(label), status)
+        }
+        view.setTextColor(getColor(color))
+    }
 
     private fun textureText(step: Int): String =
         if (step == 0) getString(R.string.texture_budget_auto)

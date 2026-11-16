@@ -1,25 +1,43 @@
 #pragma once
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <mutex>
 #include <string>
 #include "diagnostics.h"
 // Minimal logging. LOGK is for the lines that trace what the title asked of the
 // kernel or the GPU, "[k]" so they can be told from the rest.
 //
-// A whole run emits a few hundred lines, so this is not a hot path. Configure
-// with -DPES17_LOGGING=OFF to compile every call below to nothing, warnings
-// included; -DPES17_DIAGNOSTICS=OFF is what removes the traces and reports.
+// Every line says when it was written, so it can be matched with a screen
+// recording, with logcat, or with another file written at the same moment:
+//
+//     2026-11-12T07:03:22.123Z 123456.789 [i] what the caller said
+//
+// The first is UTC with milliseconds; the second is the device's uptime, which
+// is what Android's SystemClock.elapsedRealtime() reports, so a line here and
+// a line in logcat line up without a clock offset between them. Nothing sits
+// between the "[i] " marker and the message, so a line is still found by the
+// message it starts with (launcher/report.cpp searches for "] online:" and
+// "] report:"). The prefix is formatted into a buffer that is reused, and the
+// date half of it only once a second.
+//
+// A run that is not tracing emits a few hundred lines, but the traces,
+// PES17_LOG_ALL=1 and a title that logs one thing a thousand times emit orders
+// of magnitude more, which is why the prefix has to be cheap and why a line
+// that repeats is counted rather than written again.
+//
+// Configure with -DPES17_LOGGING=OFF to compile every call below to nothing,
+// warnings included; -DPES17_DIAGNOSTICS=OFF is what removes the traces and
+// reports.
 //
 // The disabled form keeps the arguments inside an `if (false)`, so they are
 // still type-checked and still count as used, and no expression in a log call
 // may have a side effect the program needs.
-//
-// PES17_LOG_TIME=1 starts every line with the seconds since the first one, so a
-// line can be matched with something somebody saw on screen at that moment.
 //
 // A line that repeats is written once and then counted rather than written
 // again (Repeat, below). The runs worth reading are the ones that log one thing
@@ -29,15 +47,53 @@
 // PES17_LOG_ALL=1 writes every line as it comes, for when the count is not enough.
 namespace pes17log
 {
+    // "2026-11-12T07:03:22.123Z": UTC, never local time, so two files written
+    // in different timezones can still be compared line by line. The date is
+    // formatted once a second per thread because gmtime is the only expensive
+    // part of writing a line, and the milliseconds are cheap.
+    inline const char* UtcStamp()
+    {
+        thread_local char text[32];
+        thread_local long long second = -1;
+        thread_local size_t dateLength = 0;
+
+        timespec now{};
+        clock_gettime(CLOCK_REALTIME, &now);
+        if (now.tv_sec != second)
+        {
+            second = now.tv_sec;
+            std::tm utc{};
+            gmtime_r(&now.tv_sec, &utc);
+            dateLength = size_t(std::snprintf(text, sizeof text, "%04d-%02d-%02dT%02d:%02d:%02d",
+                                              utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+                                              utc.tm_hour, utc.tm_min, utc.tm_sec));
+        }
+        std::snprintf(text + dateLength, sizeof text - dateLength, ".%03dZ", int(now.tv_nsec / 1000000));
+        return text;
+    }
+
+    // The uptime in seconds with three decimals: CLOCK_BOOTTIME on Android and
+    // Linux, which counts the time the device was asleep, as elapsedRealtime
+    // does. A platform that does not have it gets the plain monotonic clock,
+    // which is the same number minus the sleeps.
+    inline const char* BootText()
+    {
+        thread_local char text[24];
+        timespec up{};
+#if defined(CLOCK_BOOTTIME)
+        clock_gettime(CLOCK_BOOTTIME, &up);
+#else
+        clock_gettime(CLOCK_MONOTONIC, &up);
+#endif
+        std::snprintf(text, sizeof text, "%lld.%03ld", (long long)up.tv_sec, long(up.tv_nsec / 1000000));
+        return text;
+    }
+
+    // What every line begins with, the message behind it left alone.
     inline const char* Stamp()
     {
-        static const bool on = diag::Flag("PES17_LOG_TIME");
-        if (!on) return "";
-        static const auto start = std::chrono::steady_clock::now();
-        thread_local char text[24];
-        const double seconds = std::chrono::duration<double>(
-                                   std::chrono::steady_clock::now() - start).count();
-        std::snprintf(text, sizeof text, "%9.3f ", seconds);
+        thread_local char text[64];
+        std::snprintf(text, sizeof text, "%s %s ", UtcStamp(), BootText());
         return text;
     }
 
@@ -115,6 +171,34 @@ namespace pes17log
         return out;
     }
 
+    // One kind of line: the shape that matches it, one line of it as it was
+    // first written (the flush at the end has to print something), and how far
+    // its count has got and how much of that has already been said.
+    struct RepeatKind
+    {
+        std::string shape;
+        std::string line;
+        char level = 'i';
+        uint64_t hits = 0;
+        uint64_t written = 0;   // the largest count already beside a written line
+    };
+
+    // The repeat table, reachable from FlushRepeats as well as from Repeat.
+    struct RepeatTable
+    {
+        std::mutex lock;
+        RepeatKind kinds[512];
+        size_t used = 0;
+        uint64_t suppressed = 0;
+        std::atomic<int> warning{0};   // the count to name in the table-full line, 0 when none
+    };
+
+    inline RepeatTable& Repeats()
+    {
+        static RepeatTable table;
+        return table;
+    }
+
     // Whether this line is one to write, and what to put after it: "" the first
     // time, "  (×412)" on one of the doublings, and null for one of the hundreds
     // that are being counted instead. A repeat is therefore visible as a repeat,
@@ -137,40 +221,96 @@ namespace pes17log
         static const bool all = env::Flag("PES17_LOG_ALL");
         if (all) return "";
 
-        // One entry per kind of line. Past a hundred and twenty-eight kinds a
-        // new one is written as it comes, which is the right answer: a log with
-        // more distinct messages than that is not one where counting helps.
-        constexpr size_t kKinds = 128;
-        struct Entry
-        {
-            std::string shape;
-            uint64_t hits;
-        };
-
-        static std::mutex lock;
-        static Entry kinds[kKinds];
-        static size_t used = 0;
-
+        // One entry per kind of line. Five hundred and twelve kinds, and then
+        // the table stops growing: past that a log is not one where counting
+        // helps, and growing it further would cost every call a longer walk
+        // under the lock. A kind that does not fit is dropped rather than
+        // written every time it comes -- writing them is what the table exists
+        // to prevent -- and counted for the one line that says so.
+        RepeatTable& table = Repeats();
         const std::string shape = Shape(line);
 
-        std::lock_guard guard(lock);
-        for (size_t i = 0; i < used; i++)
+        std::lock_guard guard(table.lock);
+        for (size_t i = 0; i < table.used; i++)
         {
-            if (kinds[i].shape != shape) continue;
-            const uint64_t hits = ++kinds[i].hits;
+            RepeatKind& kind = table.kinds[i];
+            if (kind.shape != shape) continue;
+            const uint64_t hits = ++kind.hits;
             // 2nd, 4th, 8th, 16th ... and nothing between them.
             if ((hits & (hits - 1)) != 0) return nullptr;
+            kind.written = hits;
             thread_local char suffix[32];
             std::snprintf(suffix, sizeof suffix, "  (×%llu)", (unsigned long long)hits);
             return suffix;
         }
-        if (used < kKinds)
+        if (table.used < sizeof table.kinds / sizeof table.kinds[0])
         {
-            kinds[used].shape = shape;
-            kinds[used].hits = 1;
-            used++;
+            RepeatKind& kind = table.kinds[table.used++];
+            kind.shape = shape;
+            kind.line = line;
+            kind.level = line.size() > 1 && line[0] == '[' ? line[1] : 'i';
+            kind.hits = 1;
+            kind.written = 1;   // it is written now, with no count
+            return "";
         }
-        return "";
+        // Full. The first kind that does not fit is the one the warning is
+        // taken for; the counter goes on rising but the line is written once,
+        // a line per suppressed kind being the noise the table is for.
+        const int suppressed = int(++table.suppressed);
+        if (suppressed == 1) table.warning.store(suppressed);
+        return nullptr;
+    }
+
+    // The table-full warning, if one is due, and the number of kinds it names.
+    inline int TakeRepeatWarning()
+    {
+        return Repeats().warning.exchange(0);
+    }
+
+    // An already-formatted "[w] ..." line with the time in front of it, written
+    // straight to the log rather than through Repeat: the two callers are the
+    // repeat table's own account of itself, and counting those would be an
+    // argument with the lock it is already holding.
+#ifdef PES17_ANDROID
+    void RawLine(char level, const char* text);   // runtime/android/log.cpp
+#else
+    inline void RawLine(char, const char* text)
+    {
+        std::fprintf(stderr, "%s%s\n", Stamp(), text);
+    }
+#endif
+
+    inline void WarnTableFull(int kinds)
+    {
+        char text[96];
+        const int length = std::snprintf(text, sizeof text, "[w] log: repeat table full, %d kinds suppressed", kinds);
+        if (length <= 0) return;
+        std::string line(text, size_t(length));
+        RawLine('w', line.c_str());
+    }
+
+    // The counts a run never got to write, one line each: what was counted
+    // rather than written, with the total it reached. Called when the log is
+    // opened, before that file is closed or turned over, because a count that
+    // lands in a file nobody reads again is a count nobody has. Never from a
+    // signal handler: it takes the table's lock and the log's.
+    inline void FlushRepeats()
+    {
+        static const bool all = env::Flag("PES17_LOG_ALL");
+        if (all) return;   // nothing was counted
+
+        RepeatTable& table = Repeats();
+        std::lock_guard guard(table.lock);
+        for (size_t i = 0; i < table.used; i++)
+        {
+            RepeatKind& kind = table.kinds[i];
+            if (kind.hits <= kind.written) continue;
+            kind.written = kind.hits;
+            char suffix[32];
+            std::snprintf(suffix, sizeof suffix, "  (×%llu)", (unsigned long long)kind.hits);
+            std::string line = kind.line + suffix;
+            RawLine(kind.level, line.c_str());
+        }
     }
 }
 
@@ -196,7 +336,10 @@ namespace pes17log
         va_start(arguments, format);
         const std::string& line = Line(level, format, arguments);
         va_end(arguments);
-        if (const char* suffix = Repeat(line))
+        const char* suffix = Repeat(line);
+        if (const int kinds = TakeRepeatWarning())
+            WarnTableFull(kinds);
+        if (suffix)
             std::fprintf(stderr, "%s%s%s\n", Stamp(), line.c_str(), suffix);
     }
 }

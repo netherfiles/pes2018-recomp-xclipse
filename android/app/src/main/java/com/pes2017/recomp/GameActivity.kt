@@ -327,6 +327,8 @@ class GameActivity : AppCompatActivity(), NativeListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // First line of this run, before anything can take the process down.
+        EventLog.note(this, "game.start", "restored" to (savedInstanceState != null).toString())
         prefs = Prefs(this)
 
         registerMacroControl()
@@ -423,7 +425,11 @@ class GameActivity : AppCompatActivity(), NativeListener {
 
         surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) = Unit
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                // The window exists now, so its main thread can be sampled:
+                // the stalls that matter happen from here on.
+                StallWatch.start(this@GameActivity)
+            }
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
                 // The renderer draws at a fraction of the screen and the
@@ -978,7 +984,10 @@ class GameActivity : AppCompatActivity(), NativeListener {
         finishAndRemoveTask()
         // The only way to end a guest that is inside recompiled code. The
         // launcher is another process and carries on.
-        handler.postDelayed({ Process.killProcess(Process.myPid()) }, 120)
+        handler.postDelayed({
+            EventLog.note(this, "game.end", "why" to "quit")
+            Process.killProcess(Process.myPid())
+        }, 120)
     }
 
     private fun fail(message: String) {
@@ -988,7 +997,10 @@ class GameActivity : AppCompatActivity(), NativeListener {
             .setCancelable(false)
             .setPositiveButton(R.string.close) { _, _ ->
                 finish()
-                handler.postDelayed({ Process.killProcess(Process.myPid()) }, 80)
+                handler.postDelayed({
+                    EventLog.note(this, "game.end", "why" to "failed-start")
+                    Process.killProcess(Process.myPid())
+                }, 80)
             }
             .show()
     }
@@ -1349,6 +1361,7 @@ class GameActivity : AppCompatActivity(), NativeListener {
             // The activity is going for good: the run goes with it.
             GameService.stop(this)
             NativeBridge.nativeRequestStop()
+            EventLog.note(this, "game.end", "why" to "destroy")
             Process.killProcess(Process.myPid())
         }
     }

@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- app_name is set in build.gradle.kts. -->
-    <string name="check_updates">CHECK FOR UPDATES</string>
     <string name="quit_launcher">QUIT</string>
-    <string name="up_to_date">This is the newest version.</string>
 
     <!-- launcher -->
     <string name="graphics_driver">Graphics driver</string>
@@ -54,6 +52,16 @@
     <string name="log_more">and %1$d more, counted but not shown</string>
     <string name="log_everything">The whole log</string>
     <string name="log_share_note">Sharing sends the whole log, not this summary.</string>
+
+    <!-- exporting the log and the run's diagnostics -->
+    <string name="log_previous_run">previous run</string>
+    <string name="log_whole_note">Each file is the last 60 KB; the report (Export) carries everything.</string>
+    <string name="diagnostics_export">Export report</string>
+    <string name="diagnostics_export_button">EXPORT DIAGNOSTICS</string>
+    <string name="diagnostics_export_failed">The report could not be written: %1$s</string>
+    <string name="diagnostics_note_hint">What went wrong? (optional)</string>
+    <string name="diagnostics_share_subject">PES 2018 diagnostics</string>
+    <string name="advanced_switches_note">Runtime switches keep their PES17_* names (see docs/switches.md).</string>
 
     <!-- bringing a file in through the system picker -->
     <string name="pick_with_files">Choose with the Files app</string>
@@ -163,8 +171,7 @@
     <string name="reset_all_explained">Every control goes back where it started, at its original size.</string>
 
     <!-- identity -->
-    <string name="wordmark">PES17 Recompiled for Android</string>
-    <string name="wordmark_year">2017</string>
+    <string name="wordmark">PES18 Recompiled for Android</string>
     <string name="disclaimer">UNOFFICIAL FAN PORT. NOT AFFILIATED WITH KONAMI. BRING YOUR OWN COPY.</string>
     <string name="detail_default_title">MAIN MENU</string>
     <string name="detail_default_text">Pick an entry: its details show here, and choosing it acts at once.</string>
@@ -174,15 +181,17 @@
 
     <!-- main menu entries -->
     <string name="play">KICK OFF</string>
+    <string name="entry_patches">PATCHES</string>
     <string name="entry_select_folder">SELECT GAME FOLDER</string>
     <string name="entry_install">INSTALL FROM DISC IMAGE</string>
     <string name="entry_settings">SETTINGS</string>
     <string name="direct_launch">Kick off straight away when the app opens</string>
     <string name="select_folder_hint">The app first looks for the game on this phone by itself. If it cannot find it, point it at the folder that holds your PES 2018 files (default.xex and the .cpk archives). If Android has not yet let the app read that part of the storage, it asks first.</string>
     <string name="settings_hint">Picture, performance, controls and game files for this port.</string>
+    <string name="patches_menu_hint">Data packs, edited data and the previous versions; installs beside the game.</string>
     <string name="install_game">Install the game files</string>
     <string name="install_hint">Point this at a disc image (.iso) of your own PES 2018 copy, or at the folder its files were extracted to (default.xex and the .cpk archives). Only the files the game needs are copied into the app\'s own storage; about 7 GB of free space is wanted.</string>
-    <string name="status_not_installed">No game folder chosen yet.\n\nThis app contains no game data. Choose the folder with your own copy of PES 2018, or install from a disc image.</string>
+    <string name="status_not_installed">No game data yet.\n\nThis app contains no game data. Kick off to install your own copy, or point the app at the folder it was extracted to.</string>
     <string name="status_ready">Match ready.\nGame folder: %1$s</string>
     <string name="status_ready_auto">Match ready. The game files were found on this phone:\n%1$s</string>
     <string name="status_folder_missing">The chosen game folder is gone or unreadable:\n%1$s\n\nChoose it again.</string>
@@ -265,21 +274,21 @@
     <string name="resolution">Display resolution: %1$d%%</string>
     <string name="resolution_hint">How many pixels are drawn on the screen, as a share of it. The display scales the result up. PES draws at a fixed 1280\u00d7720, so this mostly trades sharpness for battery.</string>
     <string name="render_scale">Internal render multiplier: %1$dx</string>
-    <string name="render_scale_hint">Draws the match at 2x or 3x the console\u2019s 1280\u00d7720 (PES17_SCALE). Needs a lot of GPU; leave at 1x unless the phone has room to spare.</string>
+    <string name="render_scale_hint">Draws the match at 2x or 3x the console\u2019s 1280\u00d7720. Needs a lot of GPU; leave at 1x unless the phone has room to spare.</string>
     <string name="msaa">Smooth edges (multisampling)</string>
     <string name="msaa_hint">Keeps thin pitch lines from breaking into dashes. Cheap on most phones; turn it off if the match stutters.</string>
     <string name="prefer_60">Lock display to 60 Hz</string>
     <string name="prefer_60_hint">The console\u2019s frame is a 60 Hz frame. Locking avoids uneven pacing and saves battery on 90/120 Hz screens.</string>
     <string name="scene_scale">Match render quality: %1$d%%</string>
     <string name="ball_scale">Ball size: %1$d%%</string>
-    <string name="ball_scale_hint">Draws the match ball this much larger so it is easier to follow on a small screen (PES17_BALL_SCALE). 100% is the original size.</string>
-    <string name="scene_scale_hint">How large the 3D scene is drawn before it is stretched to the frame (PES17_SCENE_SCALE). 75% is the default: about 44% fewer pixels for a picture most players cannot tell apart. Go to 100% on a strong phone.</string>
+    <string name="ball_scale_hint" formatted="false">Draws the match ball this much larger so it is easier to follow on a small screen. 100% is the original size.</string>
+    <string name="scene_scale_hint" formatted="false">How large the 3D scene is drawn before it is stretched to the frame. 75% is the default: about 44% fewer pixels for a picture most players cannot tell apart. Go to 100% on a strong phone.</string>
     <string name="heat_scale">Lower quality when hot</string>
-    <string name="heat_scale_hint">Match render quality above becomes the most the picture is drawn at. As Android reports the phone heating up (moderate, severe, critical) the picture is lowered, down to 50%, before the GPU is throttled, and raised again as it cools (PES17_HEAT_SCALE). Steps are held a few seconds; one shows as the scene being redrawn for a moment.</string>
+    <string name="heat_scale_hint" formatted="false">Match render quality above becomes the most the picture is drawn at. As Android reports the phone heating up (moderate, severe, critical) the picture is lowered, down to 50%, before the GPU is throttled, and raised again as it cools. Steps are held a few seconds; one shows as the scene being redrawn for a moment.</string>
     <string name="load_scale">Lower quality when the GPU falls behind</string>
-    <string name="load_scale_hint">Steps the picture down when the render passes take too long for the frame and back up when there is room (PES17_LOAD_SCALE). It only sees GPU pass time, which on the Snapdragon 865 was not what made a slow match slow, so it rarely acts there. Experimental.</string>
+    <string name="load_scale_hint">Steps the picture down when the render passes take too long for the frame and back up when there is room. It only sees GPU pass time, which on the Snapdragon 865 was not what made a slow match slow, so it rarely acts there. Experimental.</string>
     <string name="perf_hint">System performance hint</string>
-    <string name="perf_hint_hint">Tells Android how long each frame took so it can raise or lower the CPU and GPU clock (PES17_HINT). Does nothing on a phone that refuses it, such as the Snapdragon 865 on Android 13; turn it off if a phone runs hotter with it.</string>
+    <string name="perf_hint_hint">Tells Android how long each frame took so it can raise or lower the CPU and GPU clock. Does nothing on a phone that refuses it, such as the Snapdragon 865 on Android 13; turn it off if a phone runs hotter with it.</string>
     <string name="crowd">Stadium crowd</string>
     <string name="crowd_hint">Off leaves the stands empty and spares the renderer and the GPU the crowd\u2019s drawing, which keeps the phone a little cooler in a match. The game still animates it. Takes effect the next time the game starts.</string>
     <string name="fsr">Sharper upscaling (FSR)</string>
@@ -290,12 +299,12 @@
     <string name="frame_gen_hint">The game draws 30 frames a second and a frame made between each two fills the gaps, so the 60 Hz screen stays smooth for about half the work and heat. Fast movement can look soft. Sets the 30 fps limit while on.</string>
     <string name="fsr_sharp">Sharpness: %1$.1f</string>
     <string name="widescreen">Widescreen (fill the screen)</string>
-    <string name="widescreen_hint">Widens the game\'s camera to the phone\'s shape and fills the whole screen instead of showing black bars at the sides (PES17_ASPECT). Menus and the score bar are stretched sideways. Takes effect on the next start.</string>
+    <string name="widescreen_hint">Widens the game\'s camera to the phone\'s shape and fills the whole screen instead of showing black bars at the sides. Menus and the score bar are stretched sideways. Takes effect on the next start.</string>
     <string name="fps_limit">Frame rate limit: %1$d FPS</string>
     <string name="fps_limit_off">Frame rate limit: off (60 FPS)</string>
-    <string name="fps_limit_hint">Takes the match off the 60 Hz pacing and limits it to this many frames a second (PES17_FPS_LIMIT). Lower is cooler and longer-lasting. On a 60 Hz screen 30 gives the most even motion; 35 to 55 can judder.</string>
+    <string name="fps_limit_hint">Takes the match off the 60 Hz pacing and limits it to this many frames a second. Lower is cooler and longer-lasting. On a 60 Hz screen 30 gives the most even motion; 35 to 55 can judder.</string>
     <string name="low_memory">Low-memory mode</string>
-    <string name="low_memory_hint">Skips the large vertex shadow buffer (PES17_NO_SHADOW). Use it on 6 GB phones or less, or if the match is killed in the background.</string>
+    <string name="low_memory_hint">Skips the large vertex shadow buffer. Use it on 6 GB phones or less, or if the match is killed in the background.</string>
     <string name="texture_budget_auto">Texture memory: chosen for this phone</string>
     <string name="texture_budget">Texture memory: %1$d MB</string>
     <string name="texture_hint">How much the texture cache may hold before it lets go of what has not been drawn lately. Left alone, the runtime picks a figure from this phone\u2019s memory.</string>
@@ -358,4 +367,164 @@
     <string name="capture_share">Share</string>
     <string name="capture_saved">Saved: captures/%1$s. Tell Claude its name.</string>
     <string name="capture_failed">Capture failed: %1$s</string>
+
+    <!-- PATCHES -->
+    <string name="patches_title">Patches</string>
+    <string name="patches_header_title">PATCHES</string>
+    <string name="patches_header_ready">PATCH AND EDITED DATA INSTALLED</string>
+    <string name="patches_header_patch_only">PATCH INSTALLED</string>
+    <string name="patches_header_edit_only">EDITED DATA INSTALLED</string>
+    <string name="patches_header_empty">NO PATCH OR EDITED DATA</string>
+    <string name="patches_header_no_game">NO GAME FOLDER</string>
+    <string name="patches_header_game">Game folder:\n%1$s</string>
+    <string name="patches_header_no_game_body">Choose a game folder before a patch can be installed.</string>
+    <string name="patches_header_system">GLOBAL SAVE · %1$s</string>
+    <string name="patches_system_untouched">untouched</string>
+    <string name="patches_system_updated">updated by a patch</string>
+    <string name="patches_preview_note">These figures are read from the game folder. A backup is the previous slot, kept under patch-backups so neither the runtime nor a save backup can overwrite it.</string>
+    <string name="patches_working">UPDATING THE GAME FOLDER…</string>
+    <string name="patches_help_strip">READ FROM THE GAME FOLDER · INSTALLED DATA AND THE ONE BACKUP PER SLOT</string>
+    <string name="patches_section_patch">PATCH</string>
+    <string name="patches_section_edited">EDITED DATA</string>
+    <string name="patches_section_restore">RESTORE PREVIOUS</string>
+
+    <string name="patches_status_installed">INSTALLED</string>
+    <string name="patches_status_incomplete">INCOMPLETE</string>
+    <string name="patches_status_none">NOT INSTALLED</string>
+    <string name="patches_patch_none_name">No data pack</string>
+    <string name="patches_edit_none_name">No edit save</string>
+    <string name="patches_patch_none">No data pack installed. INSTALL PATCH opens the import flow.</string>
+    <string name="patches_patch_incomplete">INCOMPLETE · The data pack is missing files. REPLACE it, or remove it and use the game as it is.</string>
+    <string name="patches_patch_hint">The data pack lives in the game folder. RESTORE puts the previous one back.</string>
+    <string name="patches_edit_none">No edit save installed. EDITED DATA is the edit save, not the system save.</string>
+    <string name="patches_edit_incomplete">INCOMPLETE · The edit save is missing files. REPLACE it, or remove it.</string>
+    <string name="patches_edit_hint">EDIT00000000 · not SYSTEM00000000</string>
+    <string name="patches_patch_meta">%1$s · installed %2$s</string>
+    <string name="patches_patch_stats">%1$d CPK · %2$s · %3$d entries</string>
+    <string name="patches_edit_meta">%1$s · installed %2$s</string>
+    <string name="patches_edit_stats">v%1$d · %2$s players · %3$d teams · %4$s</string>
+
+    <string name="patches_replace">REPLACE</string>
+    <string name="patches_restore">RESTORE</string>
+    <string name="patches_remove_patch">REMOVE PATCH</string>
+    <string name="patches_remove_edit">REMOVE EDITED DATA</string>
+    <string name="patches_restore_patch">RESTORE PATCH</string>
+    <string name="patches_restore_edit">RESTORE EDITED DATA</string>
+    <string name="patches_delete_backup">DELETE BACKUP</string>
+    <string name="patches_no_backup">No backup in this slot</string>
+    <string name="patches_backup_hint">A backup is the previous slot renamed, not a second copy. One is kept per slot; deleting it frees its space.</string>
+    <string name="patches_backup_none">No backups yet. One appears when a patch or edit save is replaced.</string>
+    <string name="patches_backup_meta">%1$s · %2$s</string>
+
+    <string name="patches_replace_patch_title">Replace PATCH?</string>
+    <string name="patches_replace_edit_title">Replace EDITED DATA?</string>
+    <string name="patches_replace_body">The new files are copied to staging first, so peak space includes staging, the backup and the source parts. What should happen to %1$s?\n\nKEEP AS BACKUP: the data installed now moves to RESTORE PREVIOUS.\nFREE OLD BACKUP FIRST: the backup already there is deleted before staging, then the data installed now is kept.\nNO BACKUP: the data installed now is discarded.</string>
+    <string name="patches_keep_backup">KEEP AS BACKUP</string>
+    <string name="patches_keep_backup_note">The data installed now moves to RESTORE PREVIOUS.</string>
+    <string name="patches_free_old">FREE OLD BACKUP FIRST</string>
+    <string name="patches_free_old_note">Delete the backup already there, then keep the data installed now.</string>
+    <string name="patches_no_backup_option">NO BACKUP</string>
+    <string name="patches_no_backup_note">Discard the data installed now. It cannot be restored.</string>
+    <string name="patches_remove_patch_title">Remove the patch?</string>
+    <string name="patches_remove_patch_body">The installed data pack is removed from the game folder. The game can still start in its own state.</string>
+    <string name="patches_remove_patch_backup">The installed data pack is removed from the game folder. A copy in RESTORE PREVIOUS is kept.</string>
+    <string name="patches_remove_edit_title">Remove the edited data?</string>
+    <string name="patches_remove_edit_body">The edit save is removed from the game folder.</string>
+    <string name="patches_remove_edit_backup">The edit save is removed from the game folder. A copy in RESTORE PREVIOUS is kept.</string>
+    <string name="patches_restore_patch_title">Restore the previous patch?</string>
+    <string name="patches_restore_patch_body">The patch installed now is set aside as the one backup, and %1$s takes its place.</string>
+    <string name="patches_restore_edit_title">Restore the previous edited data?</string>
+    <string name="patches_restore_edit_body">The edit save installed now is set aside as the one backup, and %1$s takes its place.</string>
+    <string name="patches_delete_backup_title">Delete this backup?</string>
+    <string name="patches_delete_backup_body">This frees %1$s. It cannot be undone.</string>
+    <string name="patches_game_running">Quit the game first: its data cannot be replaced while it is running.</string>
+    <string name="patches_removed">Removed (preview).</string>
+
+    <!-- the import flow -->
+    <string name="patch_import_title">Install patch</string>
+    <string name="patch_import_heading">INSTALL PATCH</string>
+    <string name="patch_import_pick_hint">Choose the patch as it was downloaded, or the folder it was extracted to. The source is scanned before anything is written.</string>
+    <string name="patch_import_archive">PATCH ARCHIVE (.ZIP / .RAR / .7Z)</string>
+    <string name="patch_import_folder">EXTRACTED PATCH FOLDER</string>
+    <string name="patch_import_multipart">MULTI-PART FOLDER (PART 1)</string>
+    <string name="patch_import_multipart_source">%1$s · %2$d parts</string>
+    <string name="patch_import_folder_default">patch folder</string>
+    <string name="patch_import_unknown_source">patch</string>
+    <string name="patch_import_unknown_name">the patch</string>
+    <string name="patch_import_source_none">No source chosen.</string>
+    <string name="patch_import_source">Source: %1$s</string>
+    <string name="patch_import_password_title">Archive password</string>
+    <string name="patch_import_password_hint">If this archive is locked, type its password. It is used for this import only and is not kept.</string>
+    <string name="patch_import_password_field">Password (leave empty if none)</string>
+    <string name="patch_import_password_use">USE PASSWORD</string>
+    <string name="patch_import_password_skip">NO PASSWORD</string>
+    <string name="patch_import_scanning">SCANNING THE SOURCE…</string>
+    <string name="patch_import_scanning_hint">Looking for the data pack, the edit save and the files that belong to neither.</string>
+    <string name="patch_import_ready">READY TO INSTALL</string>
+    <string name="patch_import_summary_source">%1$s · %2$s</string>
+    <string name="patch_import_focus">Replacing %1$s · backup policy: %2$s</string>
+    <string name="patch_import_patch_toggle">PATCH · data pack — %1$d CPK, %2$s</string>
+    <string name="patch_import_edit_toggle">EDITED DATA · edit save — %1$s players, %2$d teams</string>
+    <string name="patch_import_advanced">ADVANCED  ▸</string>
+    <string name="patch_import_advanced_open">ADVANCED  ▾</string>
+    <string name="patch_import_system_toggle">GLOBAL SAVE · SYSTEM00000000</string>
+    <string name="patch_import_system_hint">Changes the shared system save for every mode. Leave off unless the patch says it needs it.</string>
+    <string name="patch_import_system_warning">GLOBAL SAVE WILL BE REPLACED</string>
+    <string name="patch_system_confirm_title">Replace the global save?</string>
+    <string name="patch_system_confirm_body">SYSTEM00000000 holds settings and progress for every mode. Installing it replaces them. A backup is kept, but progress is not merged. Leave it off unless the patch requires it.</string>
+    <string name="patch_system_confirm_positive">REPLACE GLOBAL SAVE</string>
+    <string name="patch_system_confirm_negative">KEEP MY SAVE</string>
+    <string name="patch_import_skipped">SKIPPED · %1$d files that belong to no patch (readme.txt, preview.png)</string>
+    <string name="patch_import_no_dpfilelist">No DpFileList inside the data pack: the game will not see the new CPK files.</string>
+    <string name="patch_import_peak_title">PEAK SPACE NEEDED (NOT THE FINAL SIZE)</string>
+    <string name="patch_import_peak_value">%1$s</string>
+    <string name="patch_import_peak_breakdown">Staging %1$s + backup %2$s + spool %3$s. A %4$s reserve is included.</string>
+    <string name="patch_import_peak_freed"> The old backup is freed first: %1$s.</string>
+    <string name="patch_import_low_space">NOT ENOUGH SPACE · %1$s free, %2$s needed at peak. Free some space, or choose FREE OLD BACKUP when replacing.</string>
+    <string name="patch_import_nothing">Tick PATCH or EDITED DATA to install something.</string>
+    <string name="patch_import_install">INSTALL PATCH</string>
+    <string name="patch_import_busy">ANOTHER PATCH OPERATION IS RUNNING. WAIT FOR IT TO FINISH.</string>
+    <string name="patch_import_cancel">CANCEL</string>
+    <string name="patch_import_installing">INSTALLING PATCH…</string>
+    <string name="patch_import_progress">%1$s  (%2$d%%)</string>
+    <string name="patch_import_stop">STOP</string>
+    <string name="patch_import_cancel_title">Stop installing?</string>
+    <string name="patch_import_cancel_body">The staged copy is removed. The patch already installed is left as it was, and the backup is not changed.</string>
+    <string name="patch_import_cancel_keep">KEEP INSTALLING</string>
+    <string name="patch_import_cancel_stop">STOP INSTALL</string>
+    <string name="patch_import_result_success">PATCH INSTALLED</string>
+    <string name="patch_import_result_success_body">%1$s is installed. The previous data is in RESTORE PREVIOUS.</string>
+    <string name="patch_import_result_cancelled">INSTALL CANCELLED</string>
+    <string name="patch_import_result_cancelled_body">Nothing was changed. The source is still where you left it.</string>
+    <string name="patch_import_result_failed">INSTALL FAILED</string>
+    <string name="patch_import_result_failed_body">The import stopped: %1$s</string>
+    <string name="patch_import_not_restored">The previous data could not be fully restored. Use RESTORE PREVIOUS on the PATCHES screen before playing, or restore from patch-backups.</string>
+    <string name="patch_import_result_corrupt">SOURCE CORRUPT</string>
+    <string name="patch_import_result_corrupt_body">A part of the source could not be read. Check the download, or copy it to the phone again.</string>
+    <string name="patch_import_result_missing_part">PART MISSING</string>
+    <string name="patch_import_result_missing_part_body">The source folder is missing one of its parts. Put every part in one folder and choose part 1.</string>
+    <string name="patch_import_result_wrong_title">NOT A PES 2018 PATCH</string>
+    <string name="patch_import_result_wrong_title_body">This source does not carry the PES 2018 title data. Check that you picked the patch, not a stadium or scoreboard add-on.</string>
+    <string name="patch_import_result_no_dpfilelist">NO DPFILELIST</string>
+    <string name="patch_import_result_no_dpfilelist_body">The data pack has no DpFileList, so the game will not load its CPK files. Install anyway only if the patch says to add one by hand.</string>
+    <string name="patch_import_result_done">DONE</string>
+    <string name="patch_import_result_note">Installed into the game folder. The previous data is in RESTORE PREVIOUS when a backup was kept.</string>
+    <string name="patch_import_badge_installed">INSTALLED</string>
+    <string name="patch_import_badge_cancelled">CANCELLED</string>
+    <string name="patch_import_badge_failed">FAILED</string>
+    <string name="patch_import_badge_warning">WARNING</string>
+    <string name="patch_import_backup_keep">KEEP AS BACKUP</string>
+    <string name="patch_import_backup_free">FREE OLD BACKUP</string>
+    <string name="patch_import_backup_none">NO BACKUP</string>
+    <string name="patch_import_help_strip">NOTHING IS WRITTEN UNTIL INSTALL PATCH · CANCEL LEAVES THE GAME AS IT WAS</string>
+    <string name="patch_install_channel">Patch installation</string>
+    <string name="patch_install_notification_title">PES 2018 patch</string>
+    <string name="patch_install_phase_preparing">Preparing the import…</string>
+    <string name="patch_install_phase_scanning">Scanning the source…</string>
+    <string name="patch_install_phase_staging">Copying the selected files…</string>
+    <string name="patch_install_phase_verifying">Verifying the staged files…</string>
+    <string name="patch_install_phase_swapping">Replacing the installed files…</string>
+    <string name="patch_install_phase_cleaning">Cleaning up…</string>
+    <string name="patch_install_done">Patch installed</string>
+    <string name="patch_import_stopping">STOPPING AFTER THE CURRENT FILE…</string>
 </resources>

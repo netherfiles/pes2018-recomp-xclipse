@@ -27,7 +27,7 @@ them as unset whatever the environment says, and also drops the keys `F7`, `F10`
 | `PES17_FULLSCREEN=1` | R | starts fullscreen, borderless at the desktop's resolution. `F8` toggles it |
 | `PES17_LOG_FILE=<path>` | R | writes the log there, creating its folder. The log goes to stderr, so `> file` does not catch it. |
 | `PES17_REPORT=1` | R | what a bug report needs, as the launcher's REPORT A BUG sets it: the log names the graphics driver and ends with the run's frame rate, frame time spread and what was compiled at a draw |
-| `PES17_LOG_TIME=1` | | stamps every log line with the time since start |
+| `PES17_LOG_TIME=1` | | no longer read: every line is stamped with the time, whether it is set or not |
 | `PES17_LOG_ALL=1` | | writes every line as it comes. Without it a line that repeats is written once and then counted -- the 1st, 2nd, 4th, 8th ... with the size of the repetition beside it, which is never above the truth and within a factor of two of it -- and two lines that differ only in an address, a size or a shader hash are one kind of line. A run that logs one thing a thousand times buries the line that says what it was |
 | `PES17_NO_AUTO_SAVE_DEVICE=1` | R | leaves the save-device choice to the title's prompt instead of choosing the hard disk |
 | `PES17_NO_AUDIO=1` | R | opens no playback device; the mixer and decoder still run ([audio.md](audio.md)) |
@@ -35,6 +35,53 @@ them as unset whatever the environment says, and also drops the keys `F7`, `F10`
 | `PES17_WATCHDOG=<seconds>` | | when it fires: the `PES17_DUMP` blocks, what every guest thread is blocked on (handle and caller) or spinning on, and every thread's backtrace, which is the guest call stack; then exits |
 | `kill -USR2 <pid>` | | every thread's stack, as the watchdog prints them, and the run continues (Linux). Sent a few times, it tells a stuck thread from a looping one |
 | `PES17_INPUT_SCRIPT="20:start,26:a"` | | presses pad inputs at wall-clock seconds. An entry names a button (`a b x y lb rb start back up down left right lthumb rthumb`), a trigger (`lt`, `rt`) or a stick direction (`lx+ lx- ly+ ly- rx+ rx- ry+ ry-`), with an optional hold time: `"40:lt:25"` holds the left trigger 25 s. Default hold 0.2 s. A name ending in `@2`, `@3` or `@4` is that player's controller, which the script then stands in for: `"5:a@2"`. `guide` is the Guide button, which opens the sign-in screen |
+
+## The log
+
+Every line the runtime writes -- to stderr on a desktop, to logcat and the
+`game.log` file on Android -- starts with when it was written:
+
+```
+2026-11-12T07:03:22.123Z 123456.789 [i] android: external /sdcard/Android/data/...
+```
+
+The first field is UTC with milliseconds, never local time, so two files written
+in different timezones can still be compared line by line. The second is the
+device's uptime with three decimals, `CLOCK_BOOTTIME`, which is the number
+Android's `SystemClock.elapsedRealtime()` reports, so a line here can be put
+beside the same moment in logcat or in a screen recording. Then comes the level
+-- `[i]`, `[w]`, `[E]`, `[k]` -- and the message after it is unchanged, which is
+what `launcher/report.cpp` and the tools match on. There is no thread id.
+
+Each file begins with one line saying what wrote it, the same line in the
+internal and the external copy:
+
+```
+===== new run 2026-11-12T07:03:22.123Z boot=123456.789 pid=1234 proc=game abi=arm64-v8a device=2407FPN8EG api=36 =====
+```
+
+`proc` is `game` for the run and `launcher` for the launcher, `abi` is the
+build's, `device` is `ro.product.model` and `api` what the phone runs. The line
+still starts with `===== new run`, which is what the tools grep for to find
+where a run starts.
+
+A file already past 4 MB when it is opened is renamed to `<name>.1` -- the older
+`.1` removed first -- and a new one is started, for the internal and the external
+copy both. So `game.log` is the run that is happening and `game.log.1` the one
+before it, which is normally the one a bug report is about; nothing is deleted,
+and nothing is turned over in the middle of a run. If the rename fails (FUSE can
+refuse one) the old file is removed instead and a single warning line says so.
+
+A line that repeats is written once and then counted, with the count beside it
+at the 2nd, 4th, 8th ... repetition, and the counts still owed are written out
+when the log is next opened. The table holds 512 kinds of line; a kind that does
+not fit is not written at all, and one `[w] log: repeat table full, N kinds
+suppressed` line says so. `PES17_LOG_ALL=1` writes every line as it comes.
+
+A run that is not tracing writes a few hundred lines. The traces,
+`PES17_LOG_ALL=1` and a title that logs one thing a thousand times write far
+more: that is the runs the counting above exists for, and the ones where 4 MB is
+reached before the run ends.
 
 ## The guest
 

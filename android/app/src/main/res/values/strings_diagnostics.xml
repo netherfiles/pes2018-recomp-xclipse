@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The diagnostics export's own text: the share sheet and the failures the
+  screen has to say out loud. The report itself is English for a developer and
+  is written in DiagnosticsReport.kt.
+
+  The button and its labels live in strings.xml with the rest of the settings
+  screen; these are only the strings Diagnostics.kt and Downloads.kt use.
+-->
+<resources>
+
+    <string name="diagnostics_share_title">Send diagnostics</string>
+    <string name="diagnostics_running">A diagnostics export is already running.</string>
+    <string name="diagnostics_failed">The diagnostics ZIP could not be written: %1$s</string>
+    <string name="diagnostics_no_space">Not enough free space for the diagnostics ZIP.</string>
+    <string name="diagnostics_no_folder">The diagnostics folder could not be created.</string>
+
+    <string name="diagnostics_downloads_permission">Allow storage access to save to Downloads.</string>
+    <string name="diagnostics_downloads_failed">Could not save to Downloads: %1$s</string>
+
+</resources>

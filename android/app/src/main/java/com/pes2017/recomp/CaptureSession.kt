@@ -27,7 +27,8 @@ import java.util.Locale
  *     summary.txt    device, build, every setting, renderer and driver, frame statistics
  *     stats.csv      once every half second: fps, frame time, texture memory, temperatures
  *     game.log       the runtime's log for the stretch (and what led up to it)
- *     logcat.txt     Android's own log for the app, which holds crashes the runtime log cannot
+ *     logcat.txt     Android's own log for the app, which holds crashes the runtime log cannot;
+ *                    logcat.meta beside it says how the dump went and why it is short or empty
  *     screenshot.png the picture at the moment of stopping
  *     frames/        a small JPEG of the window every half second (the last 90 s), to see what the
  *                    screen showed; a flicker that is quicker than that shows as the odd black frame
@@ -60,7 +61,16 @@ class CaptureSession(private val activity: Activity, private val prefs: Prefs) {
         private set
     private var startedAt = 0L
     private var startedWall = 0L
-    private var logOffset = 0L
+
+    /**
+     * game.log as it was when the capture began: how many bytes it held and
+     * when it was last written. Both are read again at the stop, because the
+     * file the capture started on can be rotated away mid-capture -- the
+     * runtime deletes a log past 4 MB and starts a fresh one -- and then what
+     * led up to the start is in game.log.1 instead.
+     */
+    private var logBytes = 0L
+    private var logStamp = 0L
     private lateinit var folder: File
     private var engineAtStart = ""
     private var frameSurface: SurfaceView? = null
@@ -89,7 +99,10 @@ class CaptureSession(private val activity: Activity, private val prefs: Prefs) {
         fpsMin = Float.MAX_VALUE; fpsMax = 0f; fpsSum = 0.0; worstFrameMs = 0f; count = 0
         startedAt = SystemClock.elapsedRealtime()
         startedWall = System.currentTimeMillis()
-        logOffset = File(base, "game.log").let { if (it.isFile) it.length() else 0L }
+        File(base, "game.log").let {
+            logBytes = if (it.isFile) it.length() else 0L
+            logStamp = if (it.isFile) it.lastModified() else 0L
+        }
         folder = File(base, "captures/pending").apply { deleteRecursively(); mkdirs() }
         File(folder, "frames").mkdirs()
         // The renderer's black-frame probe runs while a capture does (it reads every frame back, which
@@ -283,21 +296,9 @@ class CaptureSession(private val activity: Activity, private val prefs: Prefs) {
 
         // The runtime's log from where the session began, with 400 lines before
         // it for what led up to the stretch.
-        val log = File(base, "game.log")
-        if (log.isFile) {
-            val text = try { log.readTextTail(6_000_000) } catch (_: Throwable) { "" }
-            val total = log.length()
-            val dropped = (total - 6_000_000).coerceAtLeast(0)
-            val from = (logOffset - dropped).coerceIn(0, text.length.toLong()).toInt()
-            val lead = text.take(from).lines().takeLast(400).joinToString("\n")
-            File(target, "game.log").writeText(lead + "\n===== capture starts here =====\n" + text.drop(from))
-        }
+        writeGameLog(target)
 
-        try {
-            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "4000"))
-            File(target, "logcat.txt").writeText(process.inputStream.bufferedReader().readText())
-        } catch (_: Throwable) {
-        }
+        writeLogcat(target)
 
         val macro = File(Macro.directory(activity), "$name.macro")
         if (macro.isFile) macro.copyTo(File(target, "$name.macro"), overwrite = true)
@@ -314,7 +315,69 @@ class CaptureSession(private val activity: Activity, private val prefs: Prefs) {
         File(target, "engine.txt").writeText(
             "=== at the start of the capture ===\n$engineAtStart\n=== at the stop ===\n${engineReport()}")
         File(target, "display.txt").writeText(displayReport())
-        File(target, "summary.txt").writeText(summary(name, note, events))
+        // A capture is shared around: the folder the player's copy of the game
+        // lives in and any absolute path in it say who they are, and nothing in
+        // a bug report needs that.
+        File(target, "summary.txt").writeText(Scrub.text(activity, summary(name, note, events)))
+    }
+
+    /**
+     * game.log from where the capture began, with 400 lines before it for what led up
+     * to the stretch.
+     *
+     * The start of the session was recorded as a byte count, so the cut is made in
+     * bytes: dropping that count off the String instead (text.drop(from)) treated a
+     * byte offset as a character index, and one line of multi-byte text before it
+     * moved the cut into the middle of a line, or past the end of what was read.
+     * The whole file is read (the runtime keeps it under 4 MB) so no offset has to
+     * be translated at all.
+     */
+    private fun writeGameLog(target: File) {
+        val log = File(base, "game.log")
+        if (!log.isFile) return
+        val bytes = try { log.readBytes() } catch (_: Throwable) { ByteArray(0) }
+        // The file the capture began on only ever grows while the capture runs,
+        // so a shorter file is a new one, and a write time that went backwards is
+        // one put back in place. (Comparing the write time for a change is no
+        // use: every line appended during the capture changes it.)
+        val rotated = logBytes > 0L && (bytes.size.toLong() < logBytes || log.lastModified() < logStamp)
+        val start = if (rotated) 0 else logBytes.coerceIn(0L, bytes.size.toLong()).toInt()
+        val lead = if (rotated) {
+            File(base, "game.log.1").let { if (it.isFile) it.readTextTail(200_000) else "" }
+        } else {
+            String(bytes, 0, start, Charsets.UTF_8).lines().takeLast(400).joinToString("\n")
+        }
+        val marker = if (rotated)
+            "\n===== the log rotated mid-capture: the lines above are game.log.1 =====\n"
+        else
+            "\n===== capture starts here =====\n"
+        File(target, "game.log").writeText(lead + marker + String(bytes, start, bytes.size - start, Charsets.UTF_8))
+    }
+
+    /**
+     * Android's own log for this run. -d dumps and returns, so nothing is left
+     * running; the main and crash buffers for this pid only, because the rest of
+     * the phone's chatter is noise in a report. logcat.meta says how it went, so
+     * an empty logcat.txt always has the reason written beside it.
+     */
+    private fun writeLogcat(target: File) {
+        val command = "logcat -d -b main,crash -t 4000 --pid=${android.os.Process.myPid()}"
+        var code = -1
+        var error = ""
+        var text = ""
+        try {
+            val process = Runtime.getRuntime().exec(
+                arrayOf("logcat", "-d", "-b", "main,crash", "-t", "4000", "--pid=${android.os.Process.myPid()}"))
+            text = process.inputStream.bufferedReader().readText()
+            error = process.errorStream.bufferedReader().readText()
+            code = process.waitFor()
+        } catch (thrown: Throwable) {
+            error = thrown.toString()
+        }
+        val body = text.ifBlank { "(logcat wrote nothing: ${error.ifBlank { "no reason given" }})\n" }
+        File(target, "logcat.txt").writeText(body)
+        File(target, "logcat.meta").writeText(
+            "command: $command\nexit: $code\nbytes: ${body.length}\nstderr: ${error.ifBlank { "(none)" }.take(4000)}\n")
     }
 
     private fun summary(name: String, note: String, events: Int): String {

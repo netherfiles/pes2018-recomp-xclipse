@@ -97,6 +97,10 @@ rad_installer.exe
 /ucode_dump/
 /*.png
 /*.spv
+/*.xml
+
+# ---- nested Gradle caches from vendored sources ----
+**/.gradle/
 
 # ---- Claude session notes ----
 .claude/
