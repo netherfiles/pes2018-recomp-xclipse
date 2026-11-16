@@ -16,7 +16,7 @@ You need your own copy of the game. Nothing from it is in this repository.
 ## Quickstart
 
 1. **Check your phone:** arm64 Android 8.0 or newer with Vulkan, and about 10 GB of free storage (the game files
-   are about 7.3 GB). A recent flagship phone is the tested target.
+   are about 7.3 GB). The tested phone is a Xiaomi 14T Pro.
 2. **Get the game files:** see [Which copy of the game you need](#which-copy-of-the-game-you-need) below, and
    copy them to the phone.
 3. **Install the app:** install a release APK from `release/` (`PES2018-recomp-<version>-patches.apk`) over USB
