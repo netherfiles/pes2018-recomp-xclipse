@@ -11,6 +11,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.input.InputManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
@@ -76,13 +77,32 @@ class GameActivity : AppCompatActivity(), NativeListener {
     private lateinit var macroButton: Button
     private var editPanel: ControlEditPanel? = null
 
-    private val pads = GamepadInput()
+    private val pads = GamepadInput(this)
     private val handler = Handler(Looper.getMainLooper())
     private var vibrator: Vibrator? = null
     private var lastRumble = 0
 
     private val statsValues = FloatArray(9)
     private var started = false
+
+    // Pads come and go while the run is up: one paired mid-match, or a
+    // Bluetooth one that sleeps and wakes with a new id. The flag keeps the
+    // listener quiet before start-up and after the run is on its way out.
+    private var padsListening = false
+    private val padsListener = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) {
+            if (padsListening) pads.refreshDevices()
+        }
+
+        override fun onInputDeviceRemoved(deviceId: Int) {
+            if (padsListening) pads.refreshDevices()
+        }
+
+        override fun onInputDeviceChanged(deviceId: Int) {
+            if (padsListening) pads.refreshDevices()
+        }
+    }
+
     private var cachedRendererInfo = ""
 
     private var cpuUsagePercent = -1f
@@ -404,6 +424,11 @@ class GameActivity : AppCompatActivity(), NativeListener {
             return
         }
         started = true
+        // Only now: before the run is up there is no pad to number, and the
+        // listener would have nothing to act on.
+        padsListening = true
+        (getSystemService(Context.INPUT_SERVICE) as? InputManager)
+            ?.registerInputDeviceListener(padsListener, handler)
         // The run is up, so ask the system to treat its process as one still
         // wanted: stepping out to a message then costs a pause, not the whole
         // load again (GameService.kt).
@@ -1348,6 +1373,11 @@ class GameActivity : AppCompatActivity(), NativeListener {
     }
 
     override fun onDestroy() {
+        // Quiet first, and before the shutdown below: started stays true, and a
+        // pad arriving while the run ends has nothing to be numbered for.
+        padsListening = false
+        (getSystemService(Context.INPUT_SERVICE) as? InputManager)
+            ?.unregisterInputDeviceListener(padsListener)
         stopWatchingThermalStatus()
         try { unregisterReceiver(macroControl) } catch (_: Throwable) {}
         Macro.stopPlayback()

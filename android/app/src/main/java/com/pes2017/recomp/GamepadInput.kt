@@ -1,5 +1,7 @@
 package com.pes2017.recomp
 
+import android.content.Context
+import android.os.Build
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -13,12 +15,21 @@ import kotlin.math.abs
  * before the other. Both are funnelled here so the runtime sees one pad per
  * player, whichever way its parts arrived.
  *
+ * Numbering: while an external pad (Bluetooth, USB) is present it takes the
+ * first slot, and the pads a handheld reports for its own controls are let go.
+ * Left alone, those take player 1 and push the pad in the player's hands down
+ * to player 2 -- and only player 1 is signed in here, which is enough for the
+ * game to refuse a save. A released device gets no slot and its events are
+ * consumed, so its keys cannot walk the Activity either. With no external pad
+ * present everything is numbered as it always was, and a slot already handed
+ * out is never moved while its device is there.
+ *
  * The whole thing can be switched off (Prefs.gamepadEnabled). That is not a
  * nicety: plenty of phones enumerate something as a gamepad that is not one,
  * and a stick reading half-left that nobody is touching makes the game
  * unplayable in a way nothing else explains.
  */
-class GamepadInput {
+class GamepadInput(private val context: Context) {
 
     private var enabled = true
 
@@ -64,27 +75,37 @@ class GamepadInput {
 
     fun isEnabled(): Boolean = enabled
 
-    /** Called at start-up and whenever a device is added or removed. */
+    /**
+     * Called at start-up, on resume, and whenever a device is added, removed or
+     * changed (the InputDeviceListener in GameActivity).
+     */
     fun refreshDevices() {
-        val seen = HashSet<Int>()
+        val pads = ArrayList<InputDevice>()
         for (id in InputDevice.getDeviceIds()) {
             val device = InputDevice.getDevice(id) ?: continue
-            if (!isPad(device)) continue
-            seen.add(id)
-            if (!slots.containsKey(id)) {
-                val slot = (firstSlot until 4).firstOrNull { free -> !slots.containsValue(free) } ?: continue
-                slots[id] = slot
-                if (enabled) NativeBridge.nativePadConnected(slot, true)
-            }
+            if (isPad(device)) pads.add(device)
         }
-        val gone = slots.keys.filter { it !in seen }
-        for (id in gone) {
-            val slot = slots.remove(id) ?: continue
-            buttons[slot] = 0
-            axes[slot].fill(0f)
-            triggers[slot][0] = 0
-            triggers[slot][1] = 0
-            NativeBridge.nativePadConnected(slot, false)
+        // isExternal is Android 10; older releases keep the old numbering.
+        val external = Build.VERSION.SDK_INT >= 29 && pads.any { isExternal(it) }
+        val keep = if (external) pads.filter { isExternal(it) } else pads
+        val keepIds = keep.map { it.id }
+
+        // Let go of everything that is no longer a candidate first, so the slot
+        // it held is free before anything is numbered. A slot already handed
+        // out is never moved: the device that holds it loses it or keeps it.
+        for (id in slots.keys.toList()) {
+            if (id in keepIds) continue
+            val why = if (InputDevice.getDevice(id) == null) "gone" else "internal, external pad present"
+            releaseSlot(id, why)
+        }
+
+        // Then number only the devices that have no slot yet.
+        for (device in keep) {
+            if (slots.containsKey(device.id)) continue
+            val slot = (firstSlot until 4).firstOrNull { free -> !slots.containsValue(free) } ?: continue
+            slots[device.id] = slot
+            if (enabled) NativeBridge.nativePadConnected(slot, true)
+            notePad(device.id, slot, null)
         }
     }
 
@@ -98,12 +119,68 @@ class GamepadInput {
         return joystick || gamepad
     }
 
+    private fun isExternal(device: InputDevice): Boolean =
+        Build.VERSION.SDK_INT >= 29 && device.isExternal
+
+    /**
+     * Whether a device may hold a slot at all: an internal pad only while no
+     * external pad is present.
+     */
+    private fun isCandidate(device: InputDevice?, externalPresent: Boolean): Boolean =
+        device != null && (!externalPresent || isExternal(device))
+
+    private fun externalPadPresent(): Boolean =
+        Build.VERSION.SDK_INT >= 29 && InputDevice.getDeviceIds().any { id ->
+            InputDevice.getDevice(id)?.let { isPad(it) && isExternal(it) } == true
+        }
+
+    /** Lets go of one device's slot, along with whatever it was holding. */
+    private fun releaseSlot(id: Int, why: String) {
+        val slot = slots.remove(id) ?: return
+        buttons[slot] = 0
+        axes[slot].fill(0f)
+        triggers[slot][0] = 0
+        triggers[slot][1] = 0
+        NativeBridge.nativePadConnected(slot, false)
+        notePad(id, slot, why)
+    }
+
+    /**
+     * One line per device that gains or loses a slot. An export then names the
+     * pad and its sources, which is how a phantom is told from the pad in the
+     * player's hands.
+     */
+    private fun notePad(id: Int, slot: Int?, why: String?) {
+        val device = InputDevice.getDevice(id)
+        val fields = mutableListOf(
+            "id" to id.toString(),
+            "name" to (device?.name ?: "gone"),
+            "external" to (device?.let { isExternal(it) } ?: false).toString(),
+            "sources" to "0x" + Integer.toHexString(device?.sources ?: 0),
+            "slot" to (slot?.toString() ?: "none"),
+        )
+        if (why != null) fields.add("released" to why)
+        EventLog.note(context, "pad", *fields.toTypedArray())
+    }
+
     private fun slotFor(deviceId: Int): Int {
         slots[deviceId]?.let { return it }
-        // A device that sent an event before the enumeration saw it.
-        val slot = (firstSlot until 4).firstOrNull { free -> !slots.containsValue(free) } ?: firstSlot
+        // A device that sent an event before the enumeration saw it, or one
+        // that arrived since. It is numbered the way refreshDevices() would
+        // have numbered it, and refused when it is not a candidate.
+        val external = externalPadPresent()
+        if (!isCandidate(InputDevice.getDevice(deviceId), external)) return -1
+        // A slot held by a device that is no longer a candidate belongs to no
+        // one; let go of it before looking for a free one.
+        for (id in slots.keys.toList()) {
+            val held = InputDevice.getDevice(id)
+            if (isCandidate(held, external)) continue
+            releaseSlot(id, if (held == null) "gone" else "internal, external pad present")
+        }
+        val slot = (firstSlot until 4).firstOrNull { free -> !slots.containsValue(free) } ?: return -1
         slots[deviceId] = slot
         NativeBridge.nativePadConnected(slot, true)
+        notePad(deviceId, slot, null)
         return slot
     }
 
@@ -119,6 +196,9 @@ class GamepadInput {
         val bit = bitFor(event.keyCode)
         if (bit == 0) return false
         val slot = slotFor(event.deviceId)
+        // A device with no slot has no buttons to index; it is consumed all the
+        // same, so nothing else treats it as a key press.
+        if (slot < 0) return true
         when (event.action) {
             KeyEvent.ACTION_DOWN -> buttons[slot] = buttons[slot] or bit
             KeyEvent.ACTION_UP -> buttons[slot] = buttons[slot] and bit.inv()
@@ -134,6 +214,9 @@ class GamepadInput {
         if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) return false
         if (event.action != MotionEvent.ACTION_MOVE) return false
         val slot = slotFor(event.deviceId)
+        // Consumed like a key from a device without a slot: the stick of a
+        // phantom must not scroll or focus anything either.
+        if (slot < 0) return true
 
         val lx = axis(event, MotionEvent.AXIS_X)
         val ly = axis(event, MotionEvent.AXIS_Y)
