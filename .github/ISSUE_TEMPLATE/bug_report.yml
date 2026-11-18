@@ -12,6 +12,9 @@ body:
         Android's exit reasons and the main-thread stall record. It does **not** contain game files, saves or
         your account.
 
+        Installing a patch is covered in `docs/patches.md`; a patch report should also name the pack and its
+        version.
+
   - type: input
     id: version
     attributes:

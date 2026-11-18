@@ -4,7 +4,8 @@ An ahead-of-time recompilation of *Pro Evolution Soccer 2018* (Xbox 360) to nati
 The game's PowerPC code is translated to C++ with [XenonRecomp](https://github.com/hedge-dev/XenonRecomp)
 and built with the Android NDK. A host runtime stands in for the console's kernel, GPU (Vulkan) and audio,
 and a Kotlin app installs the game files, configures the run and starts the native library. The app also
-installs patch data packs beside the game, backs up saves, and exports a diagnostics report.
+installs [patch data packs](docs/patches.md) beside the game, backs up saves, and exports a
+diagnostics report.
 
 This is the maintained **PES 2018** fork of
 [dzakyraf/pes2017-recomp](https://github.com/dzakyraf/pes2017-recomp). The PES 2017 build lives upstream;
@@ -39,7 +40,8 @@ You need your own copy of the game. Nothing from it is in this repository.
    (ZIP, RAR or 7z) or the folder it was extracted to; the source is scanned before anything is written, then
    **INSTALL PATCH** copies the data pack (FL, ONFIRE, SIMPLE and similar) and the edit save beside the game.
    **RESTORE PREVIOUS** puts the slot that was there back. **SETTINGS → GAME FILES** shows the game folder, the
-   space each part uses and a read-only patch summary.
+   space each part uses and a read-only patch summary. Folder shape, the import steps and each refusal are
+   in [docs/patches.md](docs/patches.md).
 8. **Back up your saves:** **SETTINGS → GAME FILES → Save data → Back up saves…** makes a zip you can keep in
    Downloads or Drive; **Restore saves…** puts one back and sets the current saves aside beside them.
 9. **If something goes wrong:** open **LOG** for a short summary, share the whole log, or tap **Export report**
@@ -87,7 +89,8 @@ Gradle. Game files go to `Android/data/com.pes2018.recomp/files/game/` (about 7.
 - **Install from the app:** pick your disc folder or ISO; an interrupted copy carries on where it stopped.
 - **Patch manager:** PATCHES installs a data pack and an edit save beside the game, scans the source before
   writing, keeps one previous version per slot, and can remove or restore it. A patch's outer CON/STFS files
-  are unpacked to the inner CPKs and `DpFileList.bin`.
+  are unpacked to the inner CPKs and `DpFileList.bin`. How to install a patch:
+  [docs/patches.md](docs/patches.md).
 - **Game files:** SETTINGS → GAME FILES shows the game folder, the space each part uses and a read-only
   summary of the installed patch.
 - **Picture settings:** display resolution, internal render multiplier (1x to 3x), match render quality, FSR
@@ -120,7 +123,7 @@ Attach that ZIP to a new issue and say:
 1. the app version from the footer (for example `0.2.9-patches · build 17`);
 2. the phone, SoC and Android version;
 3. the exact steps, and where it stopped;
-4. whether a data pack is installed.
+4. whether a data pack is installed, and which one (see [docs/patches.md](docs/patches.md)).
 
 If the app crashed before the export existed, the next launch offers the last crash; export from there.
 
@@ -139,6 +142,7 @@ If the app crashed before the export existed, the next launch offers the last cr
 | | |
 |---|---|
 | [docs/PES2018.md](docs/PES2018.md) | the 2018 port: input, status, patch importer, limits |
+| [docs/patches.md](docs/patches.md) | installing a patch data pack: the folder shape, the steps, the errors |
 | [release/BUILD-2018.md](release/BUILD-2018.md) | the 0.2.x build: APK, pipeline results, phone test steps |
 | [docs/performance.md](docs/performance.md) | in-match measurements on the phone |
 | [docs/RECOMP_RESEARCH.md](docs/RECOMP_RESEARCH.md) | recompiler findings and pipeline options |
