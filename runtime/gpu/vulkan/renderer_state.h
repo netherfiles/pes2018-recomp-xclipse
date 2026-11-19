@@ -505,6 +505,17 @@ namespace vk::renderer::detail
 
         uint64_t frames = 0, draws = 0, drawsRecorded = 0;
 
+        // ---- the sync-compile experiment (PES17_SYNC_LARGE_PIPELINES) ----
+        // How long the last finished frame took: a frame already long has room
+        // for one pipeline build, a 60 Hz one does not.
+        uint64_t lastFrameNanoseconds = 0;
+        // The frame a sync compile succeeded in, so no frame pays for two.
+        uint64_t lastSyncFrame = UINT64_MAX;
+        // The window's counters, printed in the 600-swap line before `skipped:`
+        // and reset there with lastDraws; the breaker is latched for the session.
+        uint32_t syncAttempts = 0, syncOk = 0, syncTotalMs = 0, syncMaxMs = 0;
+        bool syncBroken = false;
+
         // ---- counted for the report only; kept through Shutdown ----
         uint64_t resolves = 0, submits = 0;
         // What a first run pays that a later one does not.
@@ -848,6 +859,27 @@ namespace vk::renderer::detail
     uint32_t PassTimingKey(uint32_t width, uint32_t height, uint32_t samples, bool depth);
     void FlushShaderCache();
     void PrewarmFromCache();
+
+    // The in-flight claim on a pipeline build, and the sync-compile experiment
+    // (PES17_SYNC_LARGE_PIPELINES); both live in renderer_pipelines.cpp's warmup
+    // namespace.
+    namespace warmup
+    {
+        // One thread compiles a key; a thread that finds that key being built
+        // waits for it rather than compiling a second copy (EnsurePipeline).
+        // BeginBuild is the claim; EndBuild every way out of a build.
+        bool BeginBuild(const PipelineKey& key);
+        void EndBuild(const PipelineKey& key);
+        bool IsBuilding(const PipelineKey& key);
+        // Whether an expensive frame may build the pipeline it is missing instead
+        // of skipping the draw -- one in 500 ms, 2000 ms (or 50 attempts) a
+        // session, and never a key that already failed -- and what that attempt
+        // took. A build over 150 ms latches State::syncBroken for the rest of the
+        // session, once.
+        bool SyncCompileAllowed(const PipelineKey& key);
+        void NoteSyncCompile(const PipelineKey& key, uint32_t targetWidth, bool built,
+                             uint32_t elapsedMs);
+    }
 
     struct WarmupStats
     {

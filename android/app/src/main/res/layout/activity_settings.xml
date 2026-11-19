@@ -780,6 +780,19 @@
                         android:layout_height="wrap_content"
                         android:text="@string/exp_dynamic_depth_hint" />
 
+                    <androidx.appcompat.widget.SwitchCompat
+                        android:id="@+id/exp_sync_large"
+                        style="@style/SettingSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/exp_sync_large" />
+
+                    <TextView
+                        style="@style/SettingHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/exp_sync_large_hint" />
+
                 </LinearLayout>
 
                 <TextView

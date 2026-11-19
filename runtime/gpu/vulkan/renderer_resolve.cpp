@@ -1040,10 +1040,18 @@ void vk::renderer::Swap(uint32_t frontBuffer)
             lastFence = fence;
             g.vertexBytesCopied = g.vertexBytesReused = 0;
             g.windowWriteBacks = 0;
-            LOGI("renderer: last 600 swaps: %llu draws (%llu recorded), %llu resolves; skipped:%s",
+            LOGI("renderer: last 600 swaps: %llu draws (%llu recorded), %llu resolves;"
+                 " sync: %u built of %u in %u ms (%u ms the longest)%s; skipped:%s",
                  (unsigned long long)(g.draws - lastDraws), (unsigned long long)(g.drawsRecorded - lastRecorded),
-                 (unsigned long long)(g.resolves - lastResolves), skipped.empty() ? " nothing" : skipped.c_str());
+                 (unsigned long long)(g.resolves - lastResolves),
+                 g.syncOk, g.syncAttempts, g.syncTotalMs, g.syncMaxMs,
+                 g.syncBroken ? ", breaker tripped" : "",
+                 skipped.empty() ? " nothing" : skipped.c_str());
             lastDraws = g.draws; lastRecorded = g.drawsRecorded; lastResolves = g.resolves;
+            g.syncAttempts = 0;
+            g.syncOk = 0;
+            g.syncTotalMs = 0;
+            g.syncMaxMs = 0;
         }
     }
     auto found = g.resolvedTo.find(frontBuffer & ~0xFFFu);

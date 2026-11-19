@@ -118,6 +118,7 @@ reached before the run ends.
 | `PES17_PIPELINE_CACHE=<file>` | R | keeps the driver's compiled pipelines across runs |
 | `PES17_SHADER_CACHE=<file>` | R | records every pipeline a run needed and builds them at the next start-up |
 | `PES17_NO_PIPELINE_LIBRARIES=1` | R | builds each pipeline whole at its first draw instead of linking it from shaders compiled at load ([rendering.md](rendering.md)) |
+| `PES17_SYNC_LARGE_PIPELINES=1` | R | compiles a blocked large draw's pipeline on the render thread when the draw needs it, one a frame, with a breaker that gives up for the run after a build takes too long. Settings > Experiments sets it, off by default |
 | `PES17_TRACE_SHADER_LOADS=1` | | each shader compiled at load and each the command stream loads, with its hash |
 | `PES17_TRACE_DRAWS=<n>` | | describes n draw packets in full; `PES17_TRACE_DRAWS_AFTER=<presents>` starts later |
 | `PES17_TRACE_FRAME=<n>` | | narrates n frames' render targets and resolves |

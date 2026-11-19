@@ -1216,6 +1216,35 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         built = EnsurePipeline(key, *vertex, *pixel, &newPipeline);
         if (!built) { Skip("pipeline rejected"); return; }
     }
+    // The same for a draw into a surface the size of the frame -- the world
+    // pass, its composite: skipped while the pipeline compiles, it leaves a hole
+    // (the reporter's green block). PES17_SYNC_LARGE_PIPELINES builds it on the
+    // frame that needs it instead: one a frame, one build in 500 ms and a small
+    // budget a session (warmup::SyncCompileAllowed), and a build that takes too
+    // long gives the rest of the session back to the background worker
+    // (State::syncBroken). Off, the draw is skipped exactly as before.
+    if (!built && colourTarget->width >= 640)
+    {
+        static const bool syncLargePipelines = env::Flag("PES17_SYNC_LARGE_PIPELINES");
+        // A frame already over 25 ms (40 fps) has room for a build in it; one at
+        // 60 Hz does not, and skipping the draw costs less than the stall.
+        constexpr uint64_t kSlowFrameNanoseconds = 25000000;
+        if (syncLargePipelines && !g.syncBroken && g.frames != g.lastSyncFrame &&
+            g.lastFrameNanoseconds >= kSlowFrameNanoseconds &&
+            !warmup::IsBuilding(key) && warmup::SyncCompileAllowed(key))
+        {
+            const auto began = std::chrono::steady_clock::now();
+            {
+                Stopwatch watch(g.pipelineNanoseconds);
+                built = EnsurePipeline(key, *vertex, *pixel, &newPipeline);
+            }
+            const uint32_t tookMs = uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - began).count());
+            // Built: drawn below, and not enqueued. Not built: the enqueue and
+            // skip below, and this key is not tried again this session.
+            warmup::NoteSyncCompile(key, colourTarget->width, built != nullptr, tookMs);
+        }
+    }
     if (!built)
     {
         Recorded rec{ key.vertexShader, key.pixelShader,
@@ -1245,7 +1274,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
             }
         }
     }
-    if (newPipeline && ShaderCachePath())
+    if (built && newPipeline && ShaderCachePath())
     {
         g.recorded.push_back({ key.vertexShader, key.pixelShader,
                                uint32_t(colourTarget->format), uint32_t(depthTarget->format),

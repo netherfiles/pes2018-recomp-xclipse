@@ -102,7 +102,7 @@ class SettingsActivity : AppCompatActivity() {
         switch(R.id.fsr, prefs.fsr) { prefs.fsr = it; presetTouched() }
         switch(R.id.frame_gen, prefs.frameGeneration) { prefs.frameGeneration = it }
         switch(R.id.black_guard, prefs.blackGuard) { prefs.blackGuard = it }
-        // Experiments: arena size (Auto, 128, 192, 256, 320 MB) and four switches the runtime already has.
+        // Experiments: arena size (Auto, 128, 192, 256, 320 MB) and five switches the runtime already has.
         val arenaIds = intArrayOf(R.id.arena_auto, R.id.arena_128, R.id.arena_192, R.id.arena_256, R.id.arena_320)
         val arenaSizes = intArrayOf(0, 128, 192, 256, 320)
         val arena: android.widget.RadioGroup = findViewById(R.id.arena_size)
@@ -112,6 +112,7 @@ class SettingsActivity : AppCompatActivity() {
         switch(R.id.exp_no_table, prefs.expNoTable) { prefs.expNoTable = it }
         switch(R.id.exp_bc_hw, prefs.expBcHw) { prefs.expBcHw = it }
         switch(R.id.exp_dynamic_depth, prefs.expDynamicDepth) { prefs.expDynamicDepth = it }
+        switch(R.id.exp_sync_large, prefs.syncLargePipelines) { prefs.syncLargePipelines = it }
         bar(R.id.fsr_sharp, R.id.fsr_sharp_label, 20, (prefs.fsrSharpness * 10f).roundToInt(),
             { getString(R.string.fsr_sharp, it / 10f) }) { prefs.fsrSharpness = it / 10f }
 

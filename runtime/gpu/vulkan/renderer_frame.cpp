@@ -379,6 +379,7 @@ namespace vk::renderer::detail
         const uint64_t frameNanoseconds = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
             finishedAt - lastFinished).count());
         lastFinished = finishedAt;
+        g.lastFrameNanoseconds = frameNanoseconds;
 #ifdef PES17_ANDROID
         android::perf::ReportFrameWork(int64_t(frameNanoseconds));
 #endif

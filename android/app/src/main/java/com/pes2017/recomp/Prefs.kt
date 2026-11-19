@@ -110,6 +110,9 @@ class Prefs(context: Context) {
     var expDynamicDepth: Boolean
         get() = store.getBoolean(KEY_EXP_DYNAMIC_DEPTH, false)
         set(value) = store.edit().putBoolean(KEY_EXP_DYNAMIC_DEPTH, value).apply()
+    var syncLargePipelines: Boolean
+        get() = store.getBoolean(KEY_EXP_SYNC_LARGE, false)
+        set(value) = store.edit().putBoolean(KEY_EXP_SYNC_LARGE, value).apply()
 
     /** Show the frame before a lone black frame instead of it (PES17_BLACK_GUARD); reads every frame back, so it costs speed. */
     var blackGuard: Boolean
@@ -372,6 +375,7 @@ class Prefs(context: Context) {
         private const val KEY_EXP_NO_TABLE = "expNoTable"
         private const val KEY_EXP_BC_HW = "expBcHw"
         private const val KEY_EXP_DYNAMIC_DEPTH = "expDynamicDepth"
+        private const val KEY_EXP_SYNC_LARGE = "expSyncLargePipelines"
         private const val KEY_DYNAMIC_SCALE = "dynamicScale"   // the first, single adaptive switch
         private const val KEY_HEAT_SCALE = "heatScale"
         private const val KEY_LOAD_SCALE = "loadScale"

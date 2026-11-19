@@ -779,11 +779,16 @@ class GameActivity : AppCompatActivity(), NativeListener {
         NativeBridge.nativeSetOption("PES17_STUTTERS", "1")
         NativeBridge.nativeSetOption("PES17_BLACK_GUARD", if (prefs.blackGuard) "1" else "")
         // Settings > Experiments. Unset when off, so the runtime's own default for the phone applies.
-        NativeBridge.nativeSetOption("PES17_ARENA_MB", if (prefs.arenaMB > 0) prefs.arenaMB.toString() else "")
-        NativeBridge.nativeSetOption("PES17_FORCE_LEGACY_RENDERING", if (prefs.expLegacy) "1" else "")
-        NativeBridge.nativeSetOption("PES17_NO_DISPLAY_TABLE", if (prefs.expNoTable) "1" else "")
-        NativeBridge.nativeSetOption("PES17_FORCE_BC_HW", if (prefs.expBcHw) "1" else "")
-        NativeBridge.nativeSetOption("PES17_DYNAMIC_DEPTH_STATE", if (prefs.expDynamicDepth) "1" else "")
+        // Only while Developer tools is on: hiding the rows must actually disable an experiment left
+        // on, not just hide it. The stored choice is kept and comes back when the tools are on again.
+        if (prefs.developerTools) {
+            NativeBridge.nativeSetOption("PES17_ARENA_MB", if (prefs.arenaMB > 0) prefs.arenaMB.toString() else "")
+            NativeBridge.nativeSetOption("PES17_FORCE_LEGACY_RENDERING", if (prefs.expLegacy) "1" else "")
+            NativeBridge.nativeSetOption("PES17_NO_DISPLAY_TABLE", if (prefs.expNoTable) "1" else "")
+            NativeBridge.nativeSetOption("PES17_FORCE_BC_HW", if (prefs.expBcHw) "1" else "")
+            NativeBridge.nativeSetOption("PES17_DYNAMIC_DEPTH_STATE", if (prefs.expDynamicDepth) "1" else "")
+            NativeBridge.nativeSetOption("PES17_SYNC_LARGE_PIPELINES", if (prefs.syncLargePipelines) "1" else "")
+        }
         // The port's own switches, from Settings > Performance. Always given,
         // so a player's choice wins over the runtime's per-device defaults.
         NativeBridge.nativeSetOption("PES17_SCENE_SCALE", String.format(Locale.US, "%.4f", prefs.sceneScalePercent / 100.0))

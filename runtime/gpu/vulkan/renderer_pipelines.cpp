@@ -416,6 +416,19 @@ namespace vk::renderer::detail
             if (found != g.pipelines.end()) return found->second;
         }
 
+        // One build of a key. If another thread already has it, this caller
+        // skips: the draw that needed it skips this frame, as it would have
+        // anyway, and the build in flight finishes it. The render thread never
+        // waits here.
+        if (!warmup::BeginBuild(key)) return nullptr;
+        // Every way out of here releases the claim.
+        struct Claim
+        {
+            const PipelineKey& key;
+            explicit Claim(const PipelineKey& k) : key(k) {}
+            ~Claim() { warmup::EndBuild(key); }
+        } claim(key);
+
         if (made) *made = true;
         LOGI("renderer: pipeline miss for %016llX/%016llX (c=%d, d=%d, topo=%u, blend=%08X, mask=%X, depth=%08X, mode=%08X)",
              (unsigned long long)key.vertexShader, (unsigned long long)key.pixelShader,
@@ -485,6 +498,106 @@ namespace vk::renderer::detail
             const int64_t ms = duration_cast<milliseconds>(
                 steady_clock::now().time_since_epoch()).count();
             g_lastRenderSubmitMs.store(ms, std::memory_order_relaxed);
+        }
+
+        // ---- one build per key (EnsurePipeline) ----
+        // A leaf mutex: held only to touch the set, never across a build, and
+        // nothing else is locked while it is held. A thread that finds its key
+        // here waits for that build; that is the one wait this set adds.
+        std::mutex g_buildMutex;
+        std::unordered_set<PipelineKey, WordsHash> g_building;
+
+        bool BeginBuild(const PipelineKey& key)
+        {
+            std::lock_guard lock(g_buildMutex);
+            return g_building.insert(key).second;
+        }
+
+        void EndBuild(const PipelineKey& key)
+        {
+            std::lock_guard lock(g_buildMutex);
+            g_building.erase(key);
+        }
+
+        bool IsBuilding(const PipelineKey& key)
+        {
+            std::lock_guard lock(g_buildMutex);
+            return g_building.find(key) != g_building.end();
+        }
+
+
+
+        // ---- the sync-compile experiment (PES17_SYNC_LARGE_PIPELINES) ----
+        // How much the experiment may cost: a build on the frame that needs it is
+        // a frame the player sees, so it is paced, capped, and stops itself when
+        // one build is long enough to be a freeze in its own right.
+        constexpr std::chrono::milliseconds kSyncCooldown{ 500 };
+        constexpr uint32_t kSyncBudgetMs = 2000, kSyncBudgetAttempts = 50;
+        constexpr uint32_t kSyncBreakerMs = 150;
+
+        namespace
+        {
+            // The session's spending, which the State counters cannot hold: those
+            // are the 600-swap window's and are reset with lastDraws. Only the
+            // render thread (renderer_draw.cpp's Draw) touches any of this.
+            struct SyncBudget
+            {
+                std::chrono::steady_clock::time_point last{};   // of the last attempt
+                uint32_t totalMs = 0, attempts = 0;             // of the session
+                bool logged = false;                            // the first build
+                std::unordered_set<PipelineKey, WordsHash> failed;   // not retried
+            };
+            SyncBudget g_sync;
+        }
+
+        bool SyncCompileAllowed(const PipelineKey& key)
+        {
+            if (g_sync.failed.find(key) != g_sync.failed.end()) return false;
+            if (g_sync.attempts >= kSyncBudgetAttempts || g_sync.totalMs >= kSyncBudgetMs)
+                return false;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - g_sync.last < kSyncCooldown) return false;
+            // The attempt is paced from here, whether or not it makes a pipeline.
+            g_sync.last = now;
+            return true;
+        }
+
+        void NoteSyncCompile(const PipelineKey& key, uint32_t targetWidth, bool built,
+                             uint32_t elapsedMs)
+        {
+            g.syncAttempts++;
+            g.syncTotalMs += elapsedMs;
+            if (elapsedMs > g.syncMaxMs) g.syncMaxMs = elapsedMs;
+            g_sync.attempts++;
+            g_sync.totalMs += elapsedMs;
+            if (built)
+            {
+                // One sync build a frame, and the draw goes on to use it.
+                g.syncOk++;
+                g.lastSyncFrame = g.frames;
+                if (!g_sync.logged)
+                {
+                    g_sync.logged = true;
+                    LOGI("renderer: built a missing pipeline on the frame that needed it:"
+                         " %016llX/%016llX into a %u px surface in %u ms",
+                         (unsigned long long)key.vertexShader,
+                         (unsigned long long)key.pixelShader, targetWidth, elapsedMs);
+                }
+            }
+            else
+            {
+                // Not tried again this session: the draw below skips as it would
+                // have, and the warmup worker builds it in the background.
+                g_sync.failed.insert(key);
+            }
+            if (elapsedMs > kSyncBreakerMs && !g.syncBroken)
+            {
+                // The frame is finished normally and the pipeline, if it was made,
+                // is drawn; nothing more is compiled on the render thread.
+                g.syncBroken = true;
+                LOGI("renderer: a sync pipeline build took %u ms; the rest of this session"
+                     " builds them in the background", elapsedMs);
+            }
         }
 
         // True if the render thread has submitted a frame recently enough that the
@@ -679,7 +792,8 @@ namespace vk::renderer::detail
                     item.recorded.blendControl == rec.blendControl &&
                     item.recorded.colourMask == rec.colourMask &&
                     item.recorded.modeCntl == rec.modeCntl &&
-                    item.recorded.depthControl == rec.depthControl)
+                    item.recorded.depthControl == rec.depthControl &&
+                    item.recorded.samples == rec.samples)
                 {
                     // Already queued as prewarm: a draw now wants it, so it goes
                     // to the front as urgent.
