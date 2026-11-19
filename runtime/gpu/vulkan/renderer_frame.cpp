@@ -11,6 +11,8 @@
 #include "../../log.h"
 #include "../../pacing_trace.h"
 #include "../../report.h"
+#include "../../telemetry.h"
+#include "../../match_state.h"
 #ifdef PES17_ANDROID
 #include "../../android/android.h"
 #endif
@@ -369,15 +371,16 @@ namespace vk::renderer::detail
         g.frames++;
         FlipCrowdEvery();
         vk::textures::NewFrame();
+        // The frame's length: how long since the last one was finished. The system's
+        // performance hint (android::perf) is asked to keep it to that target, and the
+        // telemetry CSV carries it; both want the same number, taken once.
+        static auto lastFinished = std::chrono::steady_clock::now();
+        const auto finishedAt = std::chrono::steady_clock::now();
+        const uint64_t frameNanoseconds = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            finishedAt - lastFinished).count());
+        lastFinished = finishedAt;
 #ifdef PES17_ANDROID
-        {
-            // The frame's length, for the system's performance hint (android::perf): how long
-            // since the last frame was finished, which is what it is asked to keep to the target.
-            static auto last = std::chrono::steady_clock::now();
-            const auto now = std::chrono::steady_clock::now();
-            android::perf::ReportFrameWork(std::chrono::duration_cast<std::chrono::nanoseconds>(now - last).count());
-            last = now;
-        }
+        android::perf::ReportFrameWork(int64_t(frameNanoseconds));
 #endif
 
         // The title does not redraw the world every time it presents -- better than
@@ -406,7 +409,17 @@ namespace vk::renderer::detail
         }
         if (worldDrawn) ApplySceneScale();
         pacing::Note(pacing::kFrame, worldDrawn ? 1 : 0);
-        stutters::Finished(g.frames, worldDrawn);
+        // The CSV's per-frame half. The draws are the difference of the renderer's
+        // running count: g_frameDraw is cleared at the start of the swap this ends,
+        // so by now it no longer holds this frame's.
+        static uint64_t lastTelemetryDraws = 0;
+        const uint64_t drawsThisFrame = g.draws - lastTelemetryDraws;
+        lastTelemetryDraws = g.draws;
+        // The title's procedure state, not the draw-based world test: the latter
+        // is false for a whole match on this title (54 draws a frame, MSAA off).
+        const bool inMatch = match::Active().load(std::memory_order_relaxed);
+        telemetry::Frame(frameNanoseconds, uint32_t(drawsThisFrame), inMatch);
+        stutters::Finished(g.frames, inMatch);
         report::Frame(worldDrawn);
         NoteFrame(worldDrawn);
         SetCutsceneActive(!worldDrawn);

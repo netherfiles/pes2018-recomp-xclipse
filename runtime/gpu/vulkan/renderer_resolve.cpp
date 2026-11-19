@@ -21,6 +21,7 @@
 #include "../texture.h"
 #include "../gpu.h"
 #include "../../log.h"
+#include "../../telemetry.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -917,6 +918,10 @@ void vk::renderer::Swap(uint32_t frontBuffer)
         }
 #endif
         g_frameDraw = 0;
+        // The CSV's compile counters: what this run has linked and built so far,
+        // which the telemetry writer differences once a second. Read on the thread
+        // that owns them, a store each swap.
+        telemetry::Compiles(g.pipelinesLinked, g.shadersBuiltAtDraw);
         static uint32_t tick = 0;
         if (++tick % 20 == 0)
         {

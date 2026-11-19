@@ -14,6 +14,7 @@
 #ifdef PES17_ANDROID
 
 #include "android.h"
+#include "audio_stats.h"
 #include "../log.h"
 
 #include <aaudio/AAudio.h>
@@ -25,6 +26,14 @@
 #include <cstring>
 #include <mutex>
 #include <vector>
+
+// apu/audio.cpp owns the drop counter -- a frame the mixer refused to hand over
+// because the sink was already deep -- and its header is not part of this
+// change, so the one accessor is declared where it is used.
+namespace apu::audio
+{
+    uint64_t DroppedFrames();
+}
 
 namespace
 {
@@ -98,6 +107,15 @@ namespace
     std::atomic<bool> g_muted{ false };
     std::atomic<bool> g_needRestart{ false };
     std::atomic<uint64_t> g_underruns{ 0 };
+    // Frames the callback needed and the ring did not have; the underrun
+    // counter above counts the callbacks, which is a different number.
+    std::atomic<uint64_t> g_missingFrames{ 0 };
+    // The depth window GetStats() reports: the ring's occupancy when each
+    // callback arrived, accumulated here and cleared by the reader. The min
+    // starts at "nothing seen" so the first callback always replaces it.
+    std::atomic<uint32_t> g_depthMin{ UINT32_MAX };
+    std::atomic<uint64_t> g_depthSum{ 0 };
+    std::atomic<uint32_t> g_depthCount{ 0 };
     uint32_t g_deviceRate = kGuestRate;
 
     // Where the resampler is between two ring samples, when the device does
@@ -105,12 +123,30 @@ namespace
     double g_resamplePosition = 0.0;
     float g_lastSample[kOutChannels] = { 0, 0 };
 
+    // One line's worth of bookkeeping at the top of a callback: how deep the
+    // ring was when the device asked. Two atomics and a compare-exchange, which
+    // is cheap enough for a real-time callback; the window is reset by
+    // GetStats(), so a reader sees the callbacks since its own last read.
+    void RecordDepth()
+    {
+        const uint32_t depth = std::min(g_ring.Held() / kFrameSamples, kRingFrames);
+        g_depthSum.fetch_add(depth, std::memory_order_relaxed);
+        g_depthCount.fetch_add(1, std::memory_order_relaxed);
+        uint32_t low = g_depthMin.load(std::memory_order_relaxed);
+        while (depth < low &&
+               !g_depthMin.compare_exchange_weak(low, depth, std::memory_order_relaxed))
+        {
+        }
+    }
+
     aaudio_data_callback_result_t OnData(AAudioStream*, void* /*user*/, void* audioData,
                                          int32_t numFrames)
     {
         auto* out = static_cast<float*>(audioData);
         const uint32_t wanted = uint32_t(std::max(numFrames, 0));
         if (!wanted) return AAUDIO_CALLBACK_RESULT_CONTINUE;
+
+        RecordDepth();
 
         if (g_muted.load(std::memory_order_relaxed))
         {
@@ -136,6 +172,7 @@ namespace
                 std::memset(out + size_t(got) * kOutChannels, 0,
                             size_t(wanted - got) * kOutChannels * sizeof(float));
                 g_underruns.fetch_add(1, std::memory_order_relaxed);
+                g_missingFrames.fetch_add(wanted - got, std::memory_order_relaxed);
             }
             return AAUDIO_CALLBACK_RESULT_CONTINUE;
         }
@@ -158,6 +195,8 @@ namespace
                 else
                 {
                     g_underruns.fetch_add(1, std::memory_order_relaxed);
+                    // One interpolation input is one guest frame at 48 kHz.
+                    g_missingFrames.fetch_add(1, std::memory_order_relaxed);
                     nextSample[0] = nextSample[1] = 0.0f;
                 }
                 g_resamplePosition -= 1.0;
@@ -283,7 +322,9 @@ void android::audio::Close()
     std::lock_guard lock(g_streamLock);
     g_open.store(false, std::memory_order_release);
     CloseLocked();
-    LOGI("audio: stopped after %llu underruns", (unsigned long long)g_underruns.load());
+    LOGI("audio: stopped after %llu underruns, %llu missing frames",
+         (unsigned long long)g_underruns.load(),
+         (unsigned long long)g_missingFrames.load());
 }
 
 bool android::audio::IsOpen() { return g_open.load(std::memory_order_acquire); }
@@ -294,6 +335,28 @@ uint32_t android::audio::QueuedFrames()
 {
     if (!IsOpen()) return 0;
     return g_ring.Held() / kFrameSamples;
+}
+
+android::audio::Stats android::audio::GetStats()
+{
+    Stats stats;
+    stats.missingFrames = g_missingFrames.load(std::memory_order_relaxed);
+    stats.droppedFrames = apu::audio::DroppedFrames();
+
+    // Read the window and start the next one in the same call. The three
+    // exchanges are not one atomic step: a callback that lands between them is
+    // counted in the next window (or splits across two), which is a rounding
+    // error in a one-second reading, not a lost frame. The counters above are
+    // monotonic and never reset.
+    const uint32_t count = g_depthCount.exchange(0, std::memory_order_relaxed);
+    const uint64_t sum = g_depthSum.exchange(0, std::memory_order_relaxed);
+    const uint32_t low = g_depthMin.exchange(UINT32_MAX, std::memory_order_relaxed);
+    if (count)
+    {
+        stats.depthMean = uint32_t(sum / count);
+        stats.depthMin = low == UINT32_MAX ? 0 : low;
+    }
+    return stats;
 }
 
 void android::audio::Write(const float* samples, uint32_t frames)
@@ -319,8 +382,18 @@ void android::audio::Write(const float* samples, uint32_t frames)
     // Anything the ring cannot take is dropped rather than waited for: the
     // mixer must keep the title's cadence, and the sink being full means the
     // device has stalled.
-    const uint32_t room = g_ring.Free();
-    if (room < frames) return;
+    //
+    // Units: g_ring.Free() answers in samples per channel, and `frames` is
+    // samples per channel too -- one mixer block is 256 of them (android.h) --
+    // so the comparison was already sample-to-sample and playback is unchanged.
+    // It read as a check 256x too lax, though, because in this file "frame"
+    // usually means one 256-sample mixer frame. Both sides are now expressed in
+    // whole mixer frames, rounded up, so a block goes in only when the ring can
+    // hold all of it and a larger caller cannot run the write index into
+    // samples the callback has not read.
+    const uint32_t blocks = (frames + kFrameSamples - 1) / kFrameSamples;
+    const uint32_t roomBlocks = g_ring.Free() / kFrameSamples;
+    if (blocks > roomBlocks) return;
 
     // 5.1 in the console's order (L, R, C, LFE, Ls, Rs) down to stereo.
     constexpr float kCentre = 0.7071f, kSurround = 0.7071f, kLfe = 0.5f;

@@ -71,6 +71,20 @@ object Diagnostics {
     private const val CRASH_HEAD_BYTES = 8 * 1024
     private const val STDERR_CAP = 2048
 
+    /**
+     * telemetry.csv is one row a second, so 2 MB is over half an hour of frame
+     * times and audio counters -- the only place a run's frame distribution
+     * survives it. Its own head is put back in front when the tail is cut.
+     */
+    private const val TELEMETRY_BYTES = 2 * 1024 * 1024
+
+    /** Enough of a CSV's head to reach `# v1`, `# resolved:` and the row header. */
+    private const val TELEMETRY_HEAD_BYTES = 8 * 1024
+
+    /** The report reads a window of rows, not the run. */
+    private const val TELEMETRY_REPORT_BYTES = 128 * 1024
+    private const val TELEMETRY_REPORT_ROWS = 200
+
     /** Two zips' worth of headroom before the first byte is written. */
     private const val MIN_FREE = 2L * 1024 * 1024
 
@@ -296,6 +310,19 @@ object Diagnostics {
             copyTailEntry(context, zip, entries, "logs/$name", File(internal, name), TAIL_BYTES)
             copyTailEntry(context, zip, entries, "logs/$name.1", File(internal, "$name.1"), TAIL_BYTES)
         }
+        // The renderer's per-second counters, which the report's Performance
+        // section reads too. Whole rows have to stay whole for a reader to add
+        // them up, so the copy keeps the CSV's own head in front of its tail.
+        copyTelemetry(
+            context, zip, entries, "logs/telemetry.csv",
+            firstFile(File(internal, "telemetry.csv"), external?.let { File(it, "telemetry.csv") }),
+            TELEMETRY_BYTES,
+        )
+        copyTelemetry(
+            context, zip, entries, "logs/telemetry.csv.1",
+            firstFile(File(internal, "telemetry.csv.1"), external?.let { File(it, "telemetry.csv.1") }),
+            TAIL_BYTES,
+        )
     }
 
     /**
@@ -506,6 +533,80 @@ object Diagnostics {
         }
     }
 
+    /**
+     * `logs/telemetry.csv`: the same tail copy every log here gets, with the
+     * CSV's own head put back in front of it.
+     *
+     * A cut CSV is a table with no column names. The runtime writes `# v1`, a
+     * `# resolved:` line naming the settings that produced the numbers, and the
+     * `boot_ms,...` row header at the top of the file; a run longer than the cap
+     * starts after all three. They are a few dozen bytes, so the head is read
+     * and written first, and the evidence row says the tail was cut.
+     */
+    private fun copyTelemetry(
+        context: Context,
+        zip: ZipOutputStream,
+        entries: MutableList<Entry>,
+        zipPath: String,
+        file: File?,
+        maxBytes: Int,
+    ) {
+        if (file == null || !file.isFile) {
+            entries += Entry(zipPath, 0, 0, Status.MISSING)
+            return
+        }
+        val mtime = runCatching { file.lastModified() }.getOrDefault(0L)
+        try {
+            zip.putNextEntry(ZipEntry(zipPath).also { if (mtime > 0) it.time = mtime })
+            var written = 0L
+            var note = ""
+            val length = runCatching { file.length() }.getOrDefault(0L)
+            if (length > maxBytes) {
+                val head = telemetryHead(file)
+                if (head.isNotEmpty()) {
+                    // Scrubbed line by line like every other copy here.
+                    val prefix = head.joinToString("\n") { Scrub.text(context, it) } + "\n"
+                    val bytes = prefix.toByteArray(Charsets.UTF_8)
+                    zip.write(bytes)
+                    written += bytes.size
+                    note = "head prepended: the tail starts at " +
+                        DiagnosticsReport.size(length - maxBytes)
+                }
+            }
+            written += LogTail.copyTail(file, zip, maxBytes) { Scrub.text(context, it) }
+            zip.closeEntry()
+            entries += Entry(zipPath, written, mtime, if (written > 0) Status.PRESENT else Status.EMPTY, note)
+        } catch (t: Throwable) {
+            if (runCatching { zip.closeEntry() }.isFailure) throw t
+            Log.w(TAG, "could not add $zipPath", t)
+            entries += Entry(zipPath, 0, mtime, Status.ERROR)
+        }
+    }
+
+    /**
+     * The lines at the top of a telemetry CSV that make it readable: its `#`
+     * comments -- the version and what the build resolved -- and the first line
+     * after them, the row header. Empty when the file starts with neither.
+     */
+    private fun telemetryHead(file: File): List<String> {
+        val bytes = readHead(file, 0L, TELEMETRY_HEAD_BYTES)
+        if (bytes.isEmpty()) return emptyList()
+        // A head read to its cap ends mid-line; that line is not the row header.
+        var text = String(bytes, Charsets.UTF_8)
+        if (bytes.size >= TELEMETRY_HEAD_BYTES) text = text.substringBeforeLast('\n', text)
+        val kept = ArrayList<String>(4)
+        for (line in text.lines()) {
+            if (line.startsWith("#")) {
+                kept += line
+                continue
+            }
+            if (line.isBlank()) continue
+            kept += line
+            break
+        }
+        return kept
+    }
+
     private fun writeText(
         zip: ZipOutputStream,
         entries: MutableList<Entry>,
@@ -680,6 +781,7 @@ object Diagnostics {
             storage = storageLines(internal, external, game),
             dashboard = dashboard,
             dashboardNote = dashboardNote,
+            telemetry = telemetryLines(internal, external),
         )
     }
 
@@ -698,6 +800,19 @@ object Diagnostics {
         api = Build.VERSION.SDK_INT,
         abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "?",
     )
+
+    /**
+     * What the report's Performance section reads: the head that names the
+     * columns and the settings, then the newest rows. Bounded like every other
+     * tail here, and empty when this build writes no telemetry.
+     */
+    private fun telemetryLines(internal: File, external: File?): List<String> {
+        val file = firstFile(File(internal, "telemetry.csv"), external?.let { File(it, "telemetry.csv") })
+            ?: return emptyList()
+        val tail = LogTail.tailLines(file, TELEMETRY_REPORT_BYTES, TELEMETRY_REPORT_ROWS)
+        val head = telemetryHead(file).filterNot { it in tail }
+        return head + tail
+    }
 
     private fun eventLines(context: Context): List<String> {
         // Each file's newest 300 lines; the report sorts by timestamp before it

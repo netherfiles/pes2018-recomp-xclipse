@@ -6,7 +6,7 @@
 // renderer finishes a world frame late (the title presented late, or our
 // consumer took too long over it), or the display holds a frame for more than
 // one blank although the next was due. Both are watched,
-// from the first 30 world frames in a row onward, and each stutter is logged
+// from the first 30 match frames in a row onward, and each stutter is logged
 // with what the time went on in between: the costs below are timed wherever
 // the renderer does something that only happens now and then.
 //
@@ -59,8 +59,10 @@ namespace stutters
 
     // The title's D3D present returned (a guest thread).
     void TitlePresented();
-    // The renderer finished frame `serial` (the ring consumer).
-    void Finished(uint64_t serial, bool world);
+    // The renderer finished frame `serial` (the ring consumer). `inMatch` is the
+    // title's procedure state: this title's draw count never trips the old
+    // world test, so the gate is the match, not the world pass.
+    void Finished(uint64_t serial, bool inMatch);
     // The window copied frame `serial` into a present (the window thread).
     void Shown(uint64_t serial);
     // Frame `serial` reached the screen `extraBlanks` blanks later than one

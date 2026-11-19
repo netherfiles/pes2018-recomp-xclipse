@@ -131,6 +131,12 @@ object DiagnosticsReport {
         val storage: List<Pair<String, String>> = emptyList(),
         val dashboard: List<Pair<String, String>> = emptyList(),
         val dashboardNote: String = "",
+        /**
+         * The head and newest rows of `logs/telemetry.csv`, already bounded.
+         * Empty when this build writes no telemetry, which the Performance
+         * section says in a sentence rather than an error.
+         */
+        val telemetry: List<String> = emptyList(),
     )
 
     // ---- report.txt ---------------------------------------------------------
@@ -184,6 +190,9 @@ object DiagnosticsReport {
         } else {
             appendPairs(out, facts.dashboard, "dashboard")
         }
+
+        out.append("\nPerformance\n")
+        appendPerformance(out, facts.telemetry)
 
         out.append("\nEvidence\n")
         appendEvidence(out, facts)
@@ -262,6 +271,179 @@ object DiagnosticsReport {
             return
         }
         ui.takeLast(MAX_UI).forEach { out.append("  ").append(oneLine(it, 240)).append('\n') }
+    }
+
+    /**
+     * The Performance section: what the renderer's per-second rows add up to.
+     *
+     * `logs/telemetry.csv` is written by the runtime (runtime/telemetry.cpp),
+     * one row a second: frame counts, frame-time percentiles, jank, texture
+     * store evictions, the audio sink's counters. Its column names are a wire
+     * format rather than this file's, so the parser matches the names it knows
+     * and prints what is there: an older run with fewer columns still says
+     * something, and a build that writes no file says so in one line.
+     */
+    private fun appendPerformance(out: StringBuilder, lines: List<String>) {
+        var header: List<String>? = null
+        var resolved: String? = null
+        val rows = ArrayList<List<String>>(MAX_TELEMETRY_ROWS)
+        for (line in lines) {
+            if (line.startsWith("#")) {
+                val body = line.trimStart('#', ' ').trim()
+                if (body.startsWith("resolved", ignoreCase = true)) {
+                    resolved = body.substringAfter(':', "").trim().ifEmpty { null }
+                }
+                continue
+            }
+            if (line.isBlank()) continue
+            val cells = splitCsv(line)
+            if (header == null) {
+                // The first non-comment line names the columns, wherever the
+                // tail was cut: the exporter puts it back in front for this.
+                header = cells
+                continue
+            }
+            // A torn last row, or a row header that made it into the tail, is
+            // not a sample: every real row starts with boot_ms.
+            if (cells.size < 2 || cells.first().trim().toDoubleOrNull() == null) continue
+            rows += cells
+        }
+        val columns = header
+        if (columns == null || rows.isEmpty()) {
+            out.append("telemetry: not present in this build/run\n")
+            return
+        }
+
+        val window = rows.takeLast(MAX_TELEMETRY_ROWS)
+        val index = HashMap<String, Int>(columns.size * 2)
+        columns.forEachIndexed { at, name -> index.putIfAbsent(columnKey(name), at) }
+
+        /** The column among [names], exact first and then by a longer name containing it. */
+        fun column(vararg names: String): Int {
+            for (name in names) {
+                val key = columnKey(name)
+                index[key]?.let { return it }
+                // Not for short keys like "fps": they match inside unrelated
+                // names ("fpslimit", "msaa"), and "p50us" is long enough.
+                if (key.length >= 4) {
+                    index.entries.firstOrNull { it.key.contains(key) }?.let { return it.value }
+                }
+            }
+            return -1
+        }
+
+        fun value(row: List<String>, at: Int): Double? =
+            if (at < 0 || at >= row.size) null else row[at].trim().toDoubleOrNull()
+
+        /** A sum over the window, or null when the column is not there at all. */
+        fun total(at: Int): Double? {
+            if (at < 0) return null
+            val values = window.mapNotNull { value(it, at) }
+            return if (values.isEmpty()) null else values.sum()
+        }
+
+        /** The newest value: the audio and store counters are totals, not rates. */
+        fun last(at: Int): Double? =
+            if (at < 0) null else window.asReversed().mapNotNull { value(it, at) }.firstOrNull()
+
+        /** A column as milliseconds; the runtime writes microseconds unless the name says ms. */
+        fun series(at: Int): List<Double> {
+            if (at < 0) return emptyList()
+            val inMs = columnKey(columns[at]).contains("ms")
+            return window.mapNotNull { value(it, at) }.map { if (inMs) it else it / 1000.0 }
+        }
+
+        val boot = window.mapNotNull { value(it, column("bootms", "boot")) }
+        val spanMs = if (boot.size >= 2) boot.last() - boot.first() else 0.0
+
+        out.append("window".padEnd(16)).append(window.size)
+            .append(if (window.size == 1) " row" else " rows")
+        if (spanMs > 0) out.append(" · ").append(oneDecimal(spanMs / 1000.0)).append(" s")
+        out.append('\n')
+
+        // fps: the writer's own column when it has one, otherwise the frames it
+        // counted over the span the boot times give.
+        val fpsColumn = window.mapNotNull { value(it, column("fps")) }
+        if (fpsColumn.isNotEmpty()) {
+            out.append("fps".padEnd(16)).append(oneDecimal(fpsColumn.average())).append('\n')
+        } else {
+            val frames = window.mapNotNull { value(it, column("frames")) }
+            if (frames.isNotEmpty() && spanMs > 0) {
+                out.append("fps".padEnd(16)).append(oneDecimal(frames.sum() * 1000.0 / spanMs))
+                    .append(" (from frames)\n")
+            }
+        }
+
+        // Frame time: the writer's percentiles when it has them, otherwise a
+        // distribution over the window's own frame-time column.
+        val parts = ArrayList<String>(4)
+        val p50 = series(column("p50us", "p50ms", "p50"))
+        val p95 = series(column("p95us", "p95ms", "p95"))
+        val p99 = series(column("p99us", "p99ms", "p99"))
+        val worst = series(column("maxus", "maxms", "worstus", "worst"))
+        if (p50.isNotEmpty() || p95.isNotEmpty() || p99.isNotEmpty() || worst.isNotEmpty()) {
+            median(p50)?.let { parts += "p50 " + oneDecimal(it) }
+            median(p95)?.let { parts += "p95 " + oneDecimal(it) }
+            median(p99)?.let { parts += "p99 " + oneDecimal(it) }
+            worst.maxOrNull()?.let { parts += "max " + oneDecimal(it) }
+        } else {
+            val frame = series(column("frameus", "frametimeus", "framems", "frametime"))
+            median(frame)?.let { parts += "p50 " + oneDecimal(it) }
+            percentile(frame, 0.95)?.let { parts += "p95 " + oneDecimal(it) }
+            percentile(frame, 0.99)?.let { parts += "p99 " + oneDecimal(it) }
+            frame.maxOrNull()?.let { parts += "max " + oneDecimal(it) }
+        }
+        if (parts.isNotEmpty()) {
+            out.append("frame ms".padEnd(16)).append(parts.joinToString(" · ")).append('\n')
+        }
+
+        val jank33 = total(column("jank33"))
+        val jank100 = total(column("jank100"))
+        if (jank33 != null || jank100 != null) {
+            val cells = listOfNotNull(
+                jank33?.let { "33 ms " + whole(it) },
+                jank100?.let { "100 ms " + whole(it) },
+            )
+            out.append("jank".padEnd(16)).append(cells.joinToString(" · ")).append('\n')
+        }
+
+        val evictN = total(column("evictn"))
+        val evictMb = total(column("evictmb"))
+        if (evictN != null || evictMb != null) {
+            val cells = listOfNotNull(
+                evictN?.let { whole(it) + " evictions" },
+                evictMb?.let { oneDecimal(it) + " MB" },
+            )
+            out.append("evictions".padEnd(16)).append(cells.joinToString(" · ")).append('\n')
+        }
+
+        // The sink's counters are totals since the run began, so the newest row
+        // is the run's number; summing them would count every second again.
+        val missing = last(column("aumissing"))
+        val dropped = last(column("audropped"))
+        if (missing != null || dropped != null) {
+            val cells = listOfNotNull(
+                missing?.let { "missing " + whole(it) + " frames" },
+                dropped?.let { "dropped " + whole(it) + " frames" },
+            )
+            out.append("audio".padEnd(16)).append(cells.joinToString(" · ")).append('\n')
+        }
+
+        val hit = total(column("storehit"))
+        val miss = total(column("storemiss", "storemis"))
+        if (hit != null || miss != null) {
+            val cells = ArrayList<String>(3)
+            hit?.let { cells += "hit " + whole(it) }
+            miss?.let { cells += "miss " + whole(it) }
+            val all = (hit ?: 0.0) + (miss ?: 0.0)
+            if (all > 0) cells += oneDecimal((hit ?: 0.0) * 100.0 / all) + "% hit"
+            out.append("store".padEnd(16)).append(cells.joinToString(" · ")).append('\n')
+        }
+
+        // The settings that produced the rows: written once, at the top, so the
+        // tail may have lost it -- the exporter keeps it, and so does the head
+        // read above.
+        resolved?.let { out.append("resolved".padEnd(16)).append(oneLine(it, 160)).append('\n') }
     }
 
     private fun appendPairs(out: StringBuilder, pairs: List<Pair<String, String>>, empty: String) {
@@ -605,6 +787,30 @@ object DiagnosticsReport {
         else -> "$bytes B"
     }
 
+    /** One CSV row. The telemetry has no quoted fields: numbers and key=value settings. */
+    private fun splitCsv(line: String): List<String> = line.split(',')
+
+    /** A column name as the parser matches it: case, spaces and underscores do not count. */
+    private fun columnKey(name: String): String =
+        name.lowercase(Locale.US).filter { it.isLetterOrDigit() }
+
+    private fun median(values: List<Double>): Double? =
+        if (values.isEmpty()) null else values.sorted()[values.size / 2]
+
+    /** Nearest-rank, which is enough for four figures in a report. */
+    private fun percentile(values: List<Double>, fraction: Double): Double? {
+        if (values.isEmpty()) return null
+        val sorted = values.sorted()
+        val at = ((sorted.size - 1) * fraction).toInt()
+        return sorted[at.coerceIn(0, sorted.lastIndex)]
+    }
+
+    private fun oneDecimal(value: Double): String = "%.1f".format(Locale.US, value)
+
+    /** A count from the CSV: no decimal point when it has none. */
+    private fun whole(value: Double): String =
+        if (value % 1.0 == 0.0) "%.0f".format(Locale.US, value) else oneDecimal(value)
+
     /** One line of a value that came from a file: a dumped buffer must not own the page. */
     fun oneLine(text: String, max: Int): String {
         val single = text.replace('\n', ' ').replace('\r', ' ').trim()
@@ -652,6 +858,9 @@ object DiagnosticsReport {
 
     /** A row's note, if it has one, stays inside the page like everything else. */
     private const val NOTE_WIDTH = 100
+
+    /** The Performance window: two minutes of one-second rows is a stutter, not a run. */
+    private const val MAX_TELEMETRY_ROWS = 120
     private const val MAX_REPORT_CHARS = 190_000
     private const val SUMMARY_UI = 5
     private const val SUMMARY_LINES = 40

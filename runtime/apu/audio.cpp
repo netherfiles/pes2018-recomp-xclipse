@@ -330,3 +330,11 @@ void apu::audio::Report()
          (unsigned long long)g_dropped.load(), (unsigned long long)g_earlyPumps.load(),
          g_outputOpen ? "open" : "closed");
 }
+
+// What the sink's telemetry row reports as dropped: frames this file refused to
+// hand over because the host queue was already past its high-water mark. Zero
+// in a release build, where diag::Stat counts nothing.
+uint64_t apu::audio::DroppedFrames()
+{
+    return g_dropped.load();
+}

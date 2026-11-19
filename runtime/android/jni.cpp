@@ -27,6 +27,7 @@
 #include "../console.h"
 #include "../online/service.h"
 #include "../kernel/yield_backoff.h"
+#include "../telemetry.h"
 
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
@@ -170,6 +171,12 @@ namespace
         // the title's frame loop, and everything else waits on it.
         android::perf::PinToBigCores();
         android::perf::RaiseThreadPriority();
+
+        // The app has set its options and perf.cpp has sized the rest for this
+        // device, so the CSV can name what the run actually resolved to. On this
+        // thread rather than the app's: the writer is a thread of the game's
+        // process and must not start for a launcher that never plays anything.
+        telemetry::Start();
 
         char image[1024], root[1024], program[] = "pes17";
         std::snprintf(image, sizeof image, "%s", launch->image.c_str());
@@ -469,6 +476,9 @@ PES17_NATIVE(void, nativeSetThermalStatus)(JNIEnv*, jobject, jint status)
 {
     vk::renderer::SetThermalStatus(int(status));
     kernel::SetYieldHeat(int(status));
+    // The CSV's thermal column: the renderer reacts to the status, the row says
+    // which one it was reacting to when a frame ran long.
+    telemetry::SetThermal(int(status));
 }
 
 PES17_NATIVE(void, nativeSetRefreshRate)(JNIEnv*, jobject, jfloat hz)

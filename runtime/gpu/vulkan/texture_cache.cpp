@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <unistd.h>
 #include "texture_cache.h"
+#include "texture_stats.h"
 #include "../../diagnostics.h"
 
 #include "pipeline.h"
@@ -59,6 +60,7 @@ uint64_t vk::textures::Budget() { return 0; }
 void vk::textures::SetBudget(uint64_t) {}
 void vk::textures::MemoryWritten(uint32_t, uint32_t) {}
 void vk::textures::BeginUploads(uint32_t) {}
+vk::texcache::Stats vk::texcache::GetStats() { return {}; }
 #else
 
 #include <algorithm>
@@ -134,11 +136,24 @@ namespace
     }
 
     // BC1, BC2 and BC3 sent to a GPU that samples ASTC but not BC as ASTC 4x4 rather than
-    // RGBA8: a quarter of the memory and of the bytes the staging copies. Off unless
-    // PES17_BC_ASTC (or the older PES17_BC1_ASTC) is set; a prototype.
+    // RGBA8: a quarter of the memory and of the bytes the staging copies.
+    //
+    // On a phone this is the common case and not a prototype: the Mali and Xclipse
+    // parts report no textureCompressionBC at all, so every BC texture already goes
+    // through the software decoder, and RGBA8 is eight times a BC1 texture and four
+    // times the rest. On such a device ASTC is on by default -- nothing else changes
+    // shape or quality, the same decoder's output is just narrower -- and
+    // PES17_NO_BC_ASTC=1 forces it back off (a driver whose ASTC sampling misbehaves,
+    // say). PES17_BC_ASTC=1 (or the older PES17_BC1_ASTC) still forces it on, for a
+    // desktop driver asked to reproduce the phone's path through
+    // PES17_FORCE_BC_DECOMPRESS.
     bool AstcWanted()
     {
-        static const bool wanted = env::Flag("PES17_BC_ASTC") || env::Flag("PES17_BC1_ASTC");
+        static const bool wanted = [] {
+            if (env::Flag("PES17_NO_BC_ASTC")) return false;
+            if (env::Flag("PES17_BC_ASTC") || env::Flag("PES17_BC1_ASTC")) return true;
+            return vk::pipeline::AstcSampled() && !vk::pipeline::TextureCompressionBC();
+        }();
         return wanted && vk::pipeline::AstcSampled();
     }
 
@@ -281,28 +296,34 @@ namespace
     constexpr VkDeviceSize kStagingLeast = 8ull << 20, kStagingMost = 256ull << 20;
 
     // What turning guest textures into images costs the thread that parses the
-    // command stream (files/texture_timing or PES17_TEXTURE_TIMING=1): a
-    // `tex:` line every 600 frames. Cumulative nanoseconds; `frame` is this
-    // frame's share of them, which is what a stutter is made of.
+    // command stream: cumulative nanoseconds, `frame` this frame's share of them,
+    // which is what a stutter is made of. Always counted (the telemetry wants it
+    // whether or not anything is logged); the `tex:` line every 600 frames is
+    // what `on` gates.
     struct Timing
     {
         enum Part { kRead, kDecode, kStage, kParts };
         bool on = false;
-        uint64_t ns[kParts]{}, newTextures = 0, restages = 0, decodedBytes = 0;
+        // Atomic because a snapshot (texture_stats.h) is taken from another
+        // thread; each is only ever added to, so a reader sees one side of a step
+        // or the other, never half of each.
+        std::atomic<uint64_t> ns[kParts]{}, newTextures{0}, restages{0};
+        uint64_t decodedBytes = 0;
         uint64_t frame = 0, worstFrame = 0, framesOver2 = 0, framesOver8 = 0;
         uint64_t since[kParts]{}, newSince = 0, restagesSince = 0, decodedSince = 0;
     };
 
+    // One read, decode or staging, timed for the 600-frame line and for the
+    // telemetry. Always measured: the telemetry is asked for even when
+    // PES17_TEXTURE_TIMING is off, and two clock reads beside a decode of a
+    // megabyte cost nothing worth a second code path.
     class Timed
     {
     public:
-        Timed(Timing& timing, Timing::Part part) : m_timing(timing), m_part(part)
-        {
-            if (timing.on) m_from = std::chrono::steady_clock::now();
-        }
+        Timed(Timing& timing, Timing::Part part)
+            : m_timing(timing), m_part(part), m_from(std::chrono::steady_clock::now()) {}
         ~Timed()
         {
-            if (!m_timing.on) return;
             const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                              std::chrono::steady_clock::now() - m_from).count());
             m_timing.ns[m_part] += ns;
@@ -404,8 +425,12 @@ namespace
 
         uint32_t uploads = 0, failures = 0, descriptorSets = 0;
         uint64_t uploadedBytes = 0;
-        uint64_t liveBytes = 0, budget = 0;   // what the uploaded images hold, and may
-        uint64_t evicted = 0, evictedBytes = 0, evictionPasses = 0;
+        // Atomic, like Timing's counters: the telemetry (texture_stats.h) reads
+        // them on the renderer's thread while uploads, the store and the eviction
+        // pass move them.
+        std::atomic<uint64_t> liveBytes{0}, budget{0};   // what the uploaded images hold, and may
+        std::atomic<uint64_t> evicted{0}, evictedBytes{0}, evictionPasses{0};
+        std::atomic<uint64_t> evictMicros{0};   // time the passes held the frame's thread
         uint64_t stale = 0, staleBytes = 0;   // released because their memory was rewritten
         uint64_t staleNotReally = 0;          // kept: a page was written, their bytes were not
         uint64_t shared = 0;                  // fetch constants answered by an image already held
@@ -1127,9 +1152,15 @@ bool vk::textures::Initialise()
 #endif
     if (g.timing.on) LOGW("textures: timing of reads, decodes and uploads is on");
     // The store holds ASTC conversions, so it is opened -- on its own thread, ready
-    // well before a match -- only when there will be some.
-    if (AstcWanted()) vk::texstore::Open();
-    if (!g.budget)
+    // well before a match -- only when there will be some. Said out loud once: it
+    // is on without a variable on a device that samples ASTC and no BC, and that
+    // is worth being able to read back from a log.
+    if (AstcWanted())
+    {
+        LOGI("textures: BC1/2/3 are converted to ASTC 4x4 (PES17_NO_BC_ASTC=1 keeps RGBA8)");
+        vk::texstore::Open();
+    }
+    if (g.budget.load(std::memory_order_relaxed) == 0)
     {
 #if defined(PES17_ANDROID) || defined(__ANDROID__)
         g.budget = 128ull << 20;
@@ -1451,10 +1482,32 @@ namespace
     }
 }
 
+vk::texcache::Stats vk::texcache::GetStats()
+{
+    Stats stats;
+    stats.liveBytes = g.liveBytes.load(std::memory_order_relaxed);
+    stats.budgetBytes = g.budget.load(std::memory_order_relaxed);
+    stats.evictPasses = g.evictionPasses.load(std::memory_order_relaxed);
+    stats.evictTextures = g.evicted.load(std::memory_order_relaxed);
+    stats.evictBytes = g.evictedBytes.load(std::memory_order_relaxed);
+    stats.evictMicros = g.evictMicros.load(std::memory_order_relaxed);
+    stats.decodeMicros = g.timing.ns[Timing::kDecode].load(std::memory_order_relaxed) / 1'000;
+    stats.stageMicros = g.timing.ns[Timing::kStage].load(std::memory_order_relaxed) / 1'000;
+    stats.readMicros = g.timing.ns[Timing::kRead].load(std::memory_order_relaxed) / 1'000;
+    stats.newTextures = g.timing.newTextures.load(std::memory_order_relaxed);
+    stats.restaged = g.timing.restages.load(std::memory_order_relaxed);
+    // The store's own counters: a hash and a read each time it is asked, on the
+    // thread that uploads; a snapshot of them is worth its lock only here.
+    const vk::texstore::Stats store = vk::texstore::Counts();
+    stats.storeHits = store.hits;
+    stats.storeMisses = store.misses;
+    return stats;
+}
+
 uint64_t vk::textures::FrameNumber() { return g.frame; }
 
-uint64_t vk::textures::LiveBytes() { return g.liveBytes; }
-uint64_t vk::textures::Budget() { return g.budget; }
+uint64_t vk::textures::LiveBytes() { return g.liveBytes.load(std::memory_order_relaxed); }
+uint64_t vk::textures::Budget() { return g.budget.load(std::memory_order_relaxed); }
 
 // A budget the system asked for. The eviction pass is left to the next frame
 // -- it waits for the device, and the caller is whichever thread Android
@@ -1464,7 +1517,7 @@ void vk::textures::SetBudget(uint64_t bytes)
     const uint64_t floor = 48ull << 20;   // below this nothing would stay cached
     // A smaller budget is a phone asking for memory back, so the decoder's own
     // buffer goes with it; the next restage allocates it again.
-    if (bytes < g.budget) ReleaseDecodeScratch();
+    if (bytes < g.budget.load(std::memory_order_relaxed)) ReleaseDecodeScratch();
     g.budget = std::max(bytes, floor);
 }
 
@@ -1603,51 +1656,82 @@ namespace
         }
     }
 
-    // Past the budget, the idle images bound longest ago go, down to three
-    // quarters of it.
+    // Past the budget, the idle images bound longest ago go, down to a tail of
+    // it.
+    //
+    // The grace is Idle()'s and cannot be shorter. Every cached descriptor set
+    // whose key names an id holds that image's view, and a set is freed only
+    // kUnusedFrames after its last use (SweepSets); a command already recorded
+    // may still bind it, however many frames ago the cache last did. Releasing an
+    // image younger than that therefore leaves a set pointing at a destroyed
+    // VkImageView -- and ids come back LIFO (NewSlot), so the next texture to be
+    // handed the id inherits the stale set. An "emergency" second pass at
+    // sixteen frames did exactly this and was removed, not retuned: when every
+    // image is younger than the grace nothing is freed in a pass, and the budget
+    // is made up over the next ones as the tail ages.
     void Evict()
     {
-        const uint64_t target = g.budget / 4 * 3;
-        uint64_t count = 0, bytes = 0;
+        const auto from = std::chrono::steady_clock::now();
+        // The tail only: 64 MB, or 4% of the budget where that is more, and never
+        // more than half of it (a 48 MB budget is all tail). Emptying a quarter
+        // of the cache, as the old target did, threw away textures the next frame
+        // asked for again -- and decoded them twice.
+        const uint64_t slack = std::min<uint64_t>(
+            g.budget.load(std::memory_order_relaxed) / 2,
+            std::max<uint64_t>(64ull << 20, g.budget.load(std::memory_order_relaxed) / 25));
+        const uint64_t target = g.budget.load(std::memory_order_relaxed) - slack;
 
-        auto evictOldest = [&](uint64_t graceFrames) {
-            std::vector<std::pair<uint64_t, uint64_t>> candidates;
-            for (size_t i = 0; i < g.images.size(); i++)
-            {
-                const Image& img = g.images[i];
-                if (img.image && !img.borrowed && !img.pinned &&
-                    g.frame - img.lastBound >= graceFrames)
-                {
-                    candidates.push_back({ img.lastBound, uint64_t(i + 1) });
-                }
-            }
-            if (candidates.empty()) return;
-            std::sort(candidates.begin(), candidates.end());
-            for (const auto& [lastBound, id] : candidates)
-            {
-                if (g.liveBytes <= target) break;
-                bytes += g.images[size_t(id - 1)].bytes;
-                count++;
-                Release(id);
-            }
-        };
-
-        // First pass: normal idle age
-        evictOldest(kUnusedFrames + kSweepFrames);
-
-        // Emergency pass: if still over budget (e.g. streaming rush),
-        // evict images not bound in recent frames (outside GPU ring depth).
-        if (g.liveBytes > target)
+        std::vector<std::pair<uint64_t, uint64_t>> candidates;
+        for (size_t i = 0; i < g.images.size(); i++)
         {
-            evictOldest(16);
+            const Image& img = g.images[i];
+            if (img.image && !img.borrowed && !img.pinned &&
+                g.frame - img.lastBound >= kUnusedFrames + kSweepFrames)
+            {
+                candidates.push_back({ img.lastBound, uint64_t(i + 1) });
+            }
         }
+        std::sort(candidates.begin(), candidates.end());
+
+        uint64_t count = 0, bytes = 0;
+        for (const auto& [lastBound, id] : candidates)
+        {
+            if (g.liveBytes.load(std::memory_order_relaxed) <= target) break;
+            bytes += g.images[size_t(id - 1)].bytes;
+            count++;
+            Release(id);
+        }
+
+        // The invariant the grace above exists for, said once a pass: a set that
+        // names a freed id names an empty slot now, and a command that binds it
+        // would read a view that is gone. Nothing observed the old emergency pass
+        // because nothing looked; this is what looks.
+        uint64_t dangling = 0;
+        for (const auto& entry : g.sets)
+        {
+            for (const uint64_t slot : entry.first)
+            {
+                const Image* named = Find(slot);
+                if (named && !named->image && !named->view) { dangling++; break; }
+            }
+        }
+        if (dangling)
+            LOGE("textures: %llu descriptor sets name an image a pass freed (%llu images,"
+                 " %llu MB): their views are destroyed under them",
+                 (unsigned long long)dangling, (unsigned long long)count,
+                 (unsigned long long)(bytes >> 20));
 
         g.evicted += count;
         g.evictedBytes += bytes;
-        if (g.evictionPasses++ < 4)
-            LOGI("textures: over the %llu MB budget; evicted %llu (%llu MB)",
-                 (unsigned long long)(g.budget >> 20), (unsigned long long)count,
-                 (unsigned long long)(bytes >> 20));
+        g.evictionPasses++;
+        g.evictMicros += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - from).count());
+        // Once a pass, not once a frame: there is nothing to cap.
+        LOGI("textures: over the %llu MB budget; evicted %llu (%llu MB), %llu MB held, target %llu MB",
+             (unsigned long long)(g.budget.load(std::memory_order_relaxed) >> 20),
+             (unsigned long long)count, (unsigned long long)(bytes >> 20),
+             (unsigned long long)(g.liveBytes.load(std::memory_order_relaxed) >> 20),
+             (unsigned long long)(target >> 20));
     }
 }
 
@@ -1679,17 +1763,22 @@ void vk::textures::NewFrame()
         t.frame = 0;
         if (g.frame % 600 == 0)
         {
-            const auto ms = [&](int part) { return double(t.ns[part] - t.since[part]) / 1e6; };
+            const auto ms = [&](int part) {
+                return double(t.ns[part].load(std::memory_order_relaxed) - t.since[part]) / 1e6;
+            };
             LOGI("tex: %llu new, %llu restaged in 600 frames; read %.1f ms, decode %.1f ms"
                  " (%llu KB of BC), stage %.1f ms; worst frame %.1f ms, %llu frames over 2 ms,"
                  " %llu over 8 ms; since start: %llu new, decode %.0f ms, read %.0f ms, stage %.0f ms",
-                 (unsigned long long)(t.newTextures - t.newSince),
-                 (unsigned long long)(t.restages - t.restagesSince), ms(Timing::kRead),
+                 (unsigned long long)(t.newTextures.load(std::memory_order_relaxed) - t.newSince),
+                 (unsigned long long)(t.restages.load(std::memory_order_relaxed) - t.restagesSince),
+                 ms(Timing::kRead),
                  ms(Timing::kDecode), (unsigned long long)((t.decodedBytes - t.decodedSince) >> 10),
                  ms(Timing::kStage), double(t.worstFrame) / 1e6,
                  (unsigned long long)t.framesOver2, (unsigned long long)t.framesOver8,
-                 (unsigned long long)t.newTextures, double(t.ns[Timing::kDecode]) / 1e6,
-                 double(t.ns[Timing::kRead]) / 1e6, double(t.ns[Timing::kStage]) / 1e6);
+                 (unsigned long long)t.newTextures.load(std::memory_order_relaxed),
+                 double(t.ns[Timing::kDecode].load(std::memory_order_relaxed)) / 1e6,
+                 double(t.ns[Timing::kRead].load(std::memory_order_relaxed)) / 1e6,
+                 double(t.ns[Timing::kStage].load(std::memory_order_relaxed)) / 1e6);
             if (g_astc.textures || g_astc.refused)
                 LOGI("tex: bc->astc %llu textures (%llu refused): %llu KB of BC -> %llu KB ASTC"
                      " (RGBA8 would be %llu KB); transcode %.1f ms total; blocks %llu, dual-plane %llu, midpoint off >4 levels %llu, >16 levels %llu",
@@ -1709,9 +1798,10 @@ void vk::textures::NewFrame()
                 LOGI("tex: bc2/bc3 alpha: %llu blocks, %llu with varying alpha (dual plane), alpha off >8 levels in %llu, >32 in %llu",
                      (unsigned long long)a.blocks, (unsigned long long)a.dual, (unsigned long long)a.off8,
                      (unsigned long long)a.off32);
-            std::copy(t.ns, t.ns + Timing::kParts, t.since);
-            t.newSince = t.newTextures;
-            t.restagesSince = t.restages;
+            for (int part = 0; part < Timing::kParts; part++)
+                t.since[part] = t.ns[part].load(std::memory_order_relaxed);
+            t.newSince = t.newTextures.load(std::memory_order_relaxed);
+            t.restagesSince = t.restages.load(std::memory_order_relaxed);
             t.decodedSince = t.decodedBytes;
             t.worstFrame = t.framesOver2 = t.framesOver8 = 0;
         }
@@ -1730,7 +1820,8 @@ void vk::textures::NewFrame()
             const vk::imagememory::Totals memory = vk::imagememory::Held();
             LOGI("textures: %llu held (%llu MB), %llu of them bound in the last 600 frames (%llu MB);"
                  " %llu blocks of memory (%llu MB), %zu descriptor sets",
-                 (unsigned long long)held, (unsigned long long)(g.liveBytes >> 20),
+                 (unsigned long long)held,
+                 (unsigned long long)(g.liveBytes.load(std::memory_order_relaxed) >> 20),
                  (unsigned long long)recent, (unsigned long long)(recentBytes >> 20),
                  (unsigned long long)memory.blocks, (unsigned long long)(memory.blockBytes >> 20),
                  g.sets.size());
@@ -1738,7 +1829,9 @@ void vk::textures::NewFrame()
     if (g.frame % kSweepFrames == 0)
     {
         SweepSets();
-        if (g.liveBytes > g.budget) Evict();
+        if (g.liveBytes.load(std::memory_order_relaxed) >
+            g.budget.load(std::memory_order_relaxed))
+            Evict();
     }
     SweepImages();
     DestroyDoomed();
@@ -2266,9 +2359,13 @@ void vk::textures::Report()
              (unsigned long long)g.emptyDrawnInWorld, (unsigned long long)g.refilledBeforeSubmit,
              (unsigned long long)g.stillEmptyAtSubmit);
     LOGI("textures: %llu MB held at the end, against a budget of %llu MB; %llu evicted"
-         " (%llu MB) in %llu passes", (unsigned long long)(g.liveBytes >> 20),
-         (unsigned long long)(g.budget >> 20), (unsigned long long)g.evicted,
-         (unsigned long long)(g.evictedBytes >> 20), (unsigned long long)g.evictionPasses);
+         " (%llu MB) in %llu passes (%.1f ms in all)",
+         (unsigned long long)(g.liveBytes.load(std::memory_order_relaxed) >> 20),
+         (unsigned long long)(g.budget.load(std::memory_order_relaxed) >> 20),
+         (unsigned long long)g.evicted.load(std::memory_order_relaxed),
+         (unsigned long long)(g.evictedBytes.load(std::memory_order_relaxed) >> 20),
+         (unsigned long long)g.evictionPasses.load(std::memory_order_relaxed),
+         double(g.evictMicros.load(std::memory_order_relaxed)) / 1000.0);
     LOGI("textures: %llu released (%llu MB) once idle because their memory had been rewritten;"
          " %llu kept, a page of theirs written and their bytes not; %llu fetch constants were"
          " another sampler state of an image already held",

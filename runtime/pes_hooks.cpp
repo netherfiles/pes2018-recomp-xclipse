@@ -5,6 +5,7 @@
 #include "log.h"
 #include "crash.h"
 #include "kernel/kernel.h"
+#include "match_state.h"
 #include <cstring>
 #include <string>
 #include "gpu/gpu.h"
@@ -70,6 +71,13 @@ GUEST_HOOK(82F9CCE8)
     const std::string name = GuestString16(ctx.r5.u32);
     if (logged++ < 400)
         LOGW("procedure: %s (from %08X on '%s')", name.c_str(), uint32_t(ctx.lr), crash::CurrentThreadName());
+    // The play flag for telemetry and the stutter detector. Match/ is the
+    // title's own match state; ExhibiMatchInit covers the load before the
+    // first MatchSetup, and a new exhibition flow is back at the menu.
+    if (name.compare(0, 6, "Match/") == 0 || name == "Exhibition/ExhibiMatchInit")
+        match::Active().store(true, std::memory_order_relaxed);
+    else if (name == "Exhibition/ExhibiFlowInit" || name == "Exhibition/ExhibiFlowEnd")
+        match::Active().store(false, std::memory_order_relaxed);
     if (name == "Intro/ProcInstall" && once++ == 0)
     {
         const char text[] = "FirstFlow/ProcSystemDataSave";

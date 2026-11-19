@@ -14,12 +14,13 @@ namespace gpu { struct TextureData; }
 // wherever the title put them, the output is read back instead of made again.
 //
 // One file, PES17_TEXTURE_STORE (the app sets it to texture_store.bin in its
-// external folder). Records are appended by a thread of the store's own as
-// conversions happen, so a session fills it for the next; a record cut short by
-// a crash is dropped when the file is next opened. Only the index -- a few dozen
-// bytes a texture -- is held in memory; the bytes are read from the file, which
-// the store asks the kernel to read ahead at start. The header names the
-// encoder's version: a file made by another one is started again.
+// external folder), never larger than PES17_TEXTURE_STORE_MB (1024 by default).
+// Records are appended by a thread of the store's own as conversions happen, so
+// a session fills it for the next; a record cut short by a crash is dropped when
+// the file is next opened. Only the index -- a few dozen bytes a texture -- is
+// held in memory and read at start; the bytes are read from the file when a
+// texture asks for them. The header names the encoder's version: a file made by
+// another one is started again.
 namespace vk::texstore
 {
     // Opens the store named by PES17_TEXTURE_STORE on a thread of its own, the
@@ -33,7 +34,8 @@ namespace vk::texstore
               int& vkFormat, uint64_t& hash);
 
     // Keeps `converted`, made from `source` (whose hash Load gave), for the next
-    // session. Copies; the write happens on the store's thread.
+    // session. Copies the payload once, into a buffer the writer thread hands
+    // back for the next one; the write happens on that thread.
     void Save(const gpu::TextureData& source, uint32_t xenosFormat, uint64_t hash,
               const gpu::TextureData& converted, int vkFormat);
 

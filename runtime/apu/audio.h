@@ -14,4 +14,7 @@ namespace apu::audio
     void     SubmitFrame(uint32_t handle, uint32_t samplesGuestAddress);
 
     void Report();
+    // Frames the sink refused because the host queue was already past its
+    // high-water mark. Read by the telemetry row, not by the mixer itself.
+    uint64_t DroppedFrames();
 }

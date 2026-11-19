@@ -69,7 +69,11 @@ namespace
         std::thread worker, vblank;
         std::atomic<bool> running{ false };
         std::atomic<uint64_t> frames{ 0 };       // VdSwap calls
-        diag::Stat vblanks;
+        // The display's blanks, counted whether or not diagnostics are on: a
+        // diag::Stat is a no-op in a release build, so it stayed at 0, `0 % 600`
+        // was always true and the pacing line printed on every blank with a
+        // one-swap count instead of once per 600 blanks.
+        std::atomic<uint64_t> vblanks{ 0 };
         // The consumer's time in the batches it executed; the rest of its life
         // it had nothing to read, which is the title not keeping it fed.
         std::atomic<uint64_t> consumerBusyNanoseconds{ 0 };
@@ -214,8 +218,8 @@ namespace
             const auto blank = period();
             next = (now - next > blank * 4) ? now + blank : next + blank;
 
-            g.vblanks++;
-            if (g.vblanks % 600 == 0)
+            const uint64_t blanks = g.vblanks.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (blanks % 600 == 0)
             {
                 // Frames the title swapped per 600 blanks: 600 is 60 fps, 300 a
                 // title pacing itself to every second blank (30 fps by design).

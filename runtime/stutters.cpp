@@ -135,10 +135,10 @@ void stutters::TitlePresented()
         g_longestPresentGapUs.store(now - last, std::memory_order_relaxed);
 }
 
-void stutters::Finished(uint64_t serial, bool world)
+void stutters::Finished(uint64_t serial, bool inMatch)
 {
     (void)serial;
-    if (!On() || !world) return;
+    if (!On() || !inMatch) return;
     const int64_t now = pacing::Microseconds();
     const int64_t gap = r.lastWorldUs < 0 ? 0 : now - r.lastWorldUs;
     const int64_t titleGap = g_longestPresentGapUs.exchange(0, std::memory_order_relaxed);
@@ -160,7 +160,7 @@ void stutters::Finished(uint64_t serial, bool world)
         if (r.streak >= kPlayStreak)
         {
             r.pauses++;
-            LOGW("STALL: over at %.3f s, %.1f s after the last world frame", Seconds(now),
+            LOGW("STALL: over at %.3f s, %.1f s after the last match frame", Seconds(now),
                  Seconds(gap));
         }
         r.streak = 0;

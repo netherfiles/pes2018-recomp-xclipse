@@ -27,7 +27,7 @@ them as unset whatever the environment says, and also drops the keys `F7`, `F10`
 | `PES17_FULLSCREEN=1` | R | starts fullscreen, borderless at the desktop's resolution. `F8` toggles it |
 | `PES17_LOG_FILE=<path>` | R | writes the log there, creating its folder. The log goes to stderr, so `> file` does not catch it. |
 | `PES17_REPORT=1` | R | what a bug report needs, as the launcher's REPORT A BUG sets it: the log names the graphics driver and ends with the run's frame rate, frame time spread and what was compiled at a draw |
-| `PES17_LOG_TIME=1` | | no longer read: every line is stamped with the time, whether it is set or not |
+| `PES17_LOG_TIME=1` | | no longer read: every line is stamped with the time, whether it is set or not, so setting it changes nothing |
 | `PES17_LOG_ALL=1` | | writes every line as it comes. Without it a line that repeats is written once and then counted -- the 1st, 2nd, 4th, 8th ... with the size of the repetition beside it, which is never above the truth and within a factor of two of it -- and two lines that differ only in an address, a size or a shader hash are one kind of line. A run that logs one thing a thousand times buries the line that says what it was |
 | `PES17_NO_AUTO_SAVE_DEVICE=1` | R | leaves the save-device choice to the title's prompt instead of choosing the hard disk |
 | `PES17_NO_AUDIO=1` | R | opens no playback device; the mixer and decoder still run ([audio.md](audio.md)) |
@@ -134,7 +134,40 @@ reached before the run ends.
 | `PES17_RECORD_THREAD=0` | | makes the Vulkan calls on the ring consumer instead of the recorder thread |
 | `PES17_TIME_RENDER=1` | | where the ring consumer's time goes, and how long it waits on the GPU |
 | `PES17_TRACE_PACING=<file>` | | a timeline written at exit: the consumer's batches and swaps, the title's presents, and every guest thread's engine waits, kernel waits and sleeps with their callers |
-| `PES17_STUTTERS=1` | | (at the console's pacing only, not under `PES17_FPS_LIMIT`) from the first 30 consecutive world frames on, logs `STUTTER` for every world frame 25 ms or more after the previous one, with what the renderer spent the gap on, and `DISPLAY` when a frame is held or dropped by the window; totals at exit. When play stops for a second it logs `STALL` with what every guest thread waits on and every thread's stack (Linux), once a stall. The pad's Y and `F7` log a `STUTTER MARK` |
+| `PES17_STUTTERS=1` | | (at the console's pacing only, not under `PES17_FPS_LIMIT`) from the first 30 consecutive match frames on, logs `STUTTER` for every match frame 25 ms or more after the previous one (the match state comes from the title's `Match/...` procedure, not the draw-based world test), with what the renderer spent the gap on, and `DISPLAY` when a frame is held or dropped by the window; totals at exit. When play stops for a second it logs `STALL` with what every guest thread waits on and every thread's stack (Linux), once a stall. The pad's Y and `F7` log a `STUTTER MARK` |
+
+## Textures, store and telemetry
+
+| switch | effect |
+|---|---|
+| `PES17_BC_ASTC` | where the GPU samples ASTC 4x4 LDR and does not sample BC, BC1/BC2/BC3 are converted to ASTC 4x4 instead of RGBA8: a quarter of the memory and of the bytes staged. It is on by default on those devices; `PES17_BC1_ASTC` is the same switch under its older name, and setting either is the same as leaving it |
+| `PES17_NO_BC_ASTC=1` | turns that conversion off, leaving the software decode to RGBA8. This is the side to use in an A/B of the conversion |
+| `PES17_TEXTURE_STORE=<file>` | the file the converted textures are kept in between runs. The app sets `<internal files>/texture_store.bin`; unset leaves the store closed, and it is only written while BC to ASTC is on ([textures.md](textures.md)) |
+| `PES17_TEXTURE_STORE_MB=<n>` | the store's cap, 1024 MB. It stops adding records past it; what is already there still reads back |
+| `PES17_TEXTURE_TIMING=1` | per-texture conversion and decode time, in the log's `tex:` lines |
+| `PES17_TELEMETRY=0` | turns off the once-a-second telemetry CSV. It is on by default in a build that has it |
+
+The telemetry file is
+`/sdcard/Android/data/com.pes2018.recomp/files/telemetry.csv`, beside
+`env_override`; the file it is rotated to is `telemetry.csv.1`. It is one row a
+second, comma separated, after two comment lines and a row header:
+
+```
+# v1 ...
+# resolved: texture_budget_mb=..., bc_astc=..., store=..., store_mb=..., msaa=..., scene_scale=..., fps_limit=..., hint=..., audio_burst=..., arena_mb=...
+boot_ms,wall_ms,run_s,frames,ft_p50_us,ft_p95_us,ft_p99_us,ft_max_us,jank20,jank33,jank50,jank100,draws,presents,...
+```
+
+The first line names the format. `# resolved` is what the run settled on, so it
+is where to look when the question is whether a switch arrived; the row header
+names the columns. `frames` is a second's frames, `ft_*_us` are microseconds,
+`draws` and `presents` are that second's counts, and the jank columns count
+frames past 20, 33, 50 and 100 ms. A later build may add columns, so a reader
+goes by the name and tolerates one that is absent; `tools/device_ab.sh` and
+`tools/ab_window.sh` use `evict_n`, `evict_mb`, `au_missing`, `store_hit`,
+`store_miss`, `thermal` and `armed` where the build writes them, and say a
+column is absent rather than reading it as zero. `armed=0`, no rows, or no
+`# resolved` line rejects the run.
 
 ## Frames and captures
 

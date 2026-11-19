@@ -80,6 +80,15 @@ namespace
         std::vector<StoredLevel> levels;
     };
 
+    // One record waiting for the writer: where it belongs in the index, and the
+    // payload on its own -- the head is made from the entry when the write
+    // happens, so the payload is the only thing that has to be held.
+    struct Job
+    {
+        Entry entry;
+        std::vector<uint8_t> payload;
+    };
+
     // Four lanes, as the texture cache signs guest memory (texture_cache.cpp).
     uint64_t Hash(const uint8_t* base, size_t bytes)
     {
@@ -131,10 +140,16 @@ namespace
         std::mutex lock;            // index, end
         std::unordered_map<uint64_t, Entry> index;   // by key.hash
 
-        // The writer's queue: whole records, ready to append.
+        // The writer's queue: one payload each, ready to append.
         std::mutex queueLock;
         std::condition_variable wake;
-        std::deque<std::pair<Entry, std::vector<uint8_t>>> queue;
+        std::deque<Job> queue;
+        // Payload buffers the writer has finished with, kept for the next Save:
+        // a texture's payload is four to sixteen megabytes, and allocating and
+        // freeing one per texture cost more than the copy into it. Capped, since
+        // what is not reused is only memory held for a texture that may never
+        // come.
+        std::vector<std::vector<uint8_t>> spare;
         uint64_t queuedBytes = 0;
         std::thread writer;
 
@@ -148,6 +163,15 @@ namespace
 
     // At most this much waiting to be written; past it a conversion is not kept.
     constexpr uint64_t kQueueMost = 64ull << 20;
+
+    // Payload buffers the writer keeps for the next Save (State::spare).
+    constexpr size_t kSpareMost = 4;
+
+    // How much of the file is read ahead when it is opened. See ReadAhead.
+    constexpr uint64_t kReadAheadMost = 8ull << 20;
+
+    // The size the store grows to unless PES17_TEXTURE_STORE_MB says otherwise.
+    constexpr uint64_t kDefaultStoreMB = 1024;
 
     bool ReadAll(int fd, void* into, size_t bytes, uint64_t at)
     {
@@ -203,17 +227,34 @@ namespace
             LOGW("texstore: dropped %llu bytes after the last whole record", (unsigned long long)(size - at));
     }
 
-    // Reads the whole file once, start to end, so the kernel holds it by the time
-    // a match asks for it: a read from flash cost about 0.6 ms a texture.
-    void ReadThrough(State& s, uint64_t size)
+    // A bounded read ahead: the head of the file, where the oldest records are,
+    // into the kernel's cache before the first texture asks for one. The whole
+    // file is deliberately left alone -- at the default size it is a gigabyte,
+    // and reading it all cost seconds before the first frame for records the
+    // session may never name. A record past this prefix is read when it is
+    // asked for, about 0.6 ms a texture once, which is the trade for a launch
+    // that does not wait on the disk.
+    void ReadAhead(State& s, uint64_t size)
     {
+        const uint64_t bytes = std::min(size, kReadAheadMost);
+        if (!bytes) return;
         const auto started = std::chrono::steady_clock::now();
-        std::vector<uint8_t> chunk(4u << 20);
-        for (uint64_t at = 0; at < size; at += chunk.size())
-            if (!ReadAll(s.fd, chunk.data(), size_t(std::min<uint64_t>(chunk.size(), size - at)), at))
-                break;
-        LOGI("texstore: read ahead %llu MB in %.0f ms", (unsigned long long)(size >> 20),
-             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+        std::vector<uint8_t> chunk(static_cast<size_t>(bytes));
+        if (!ReadAll(s.fd, chunk.data(), chunk.size(), 0)) return;
+        LOGI("texstore: read ahead %llu MB in %.1f ms of a %llu MB file",
+             (unsigned long long)(bytes >> 20),
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
+             (unsigned long long)(size >> 20));
+    }
+
+    // A payload buffer back for the next Save. Called on the writer thread, once
+    // the write that used it is done.
+    void Recycle(State& s, std::vector<uint8_t>&& payload)
+    {
+        std::lock_guard<std::mutex> hold(s.queueLock);
+        if (s.spare.size() >= kSpareMost) return;
+        payload.clear();
+        s.spare.push_back(std::move(payload));
     }
 
     void WriterLoop()
@@ -221,39 +262,63 @@ namespace
         State& s = S();
         for (;;)
         {
-            std::pair<Entry, std::vector<uint8_t>> job;
+            Job job;
             {
                 std::unique_lock<std::mutex> hold(s.queueLock);
                 s.wake.wait(hold, [&] { return !s.queue.empty(); });
                 job = std::move(s.queue.front());
                 s.queue.pop_front();
-                s.queuedBytes -= job.second.size();
+                s.queuedBytes -= job.payload.size() + sizeof(RecordHead) +
+                                 job.entry.levels.size() * sizeof(StoredLevel);
             }
-            Entry& entry = job.first;
-            uint64_t at;
+            Entry& entry = job.entry;
+            // The head is made here rather than carried in the queue beside the
+            // payload: it is a hundred bytes of fields the entry already holds.
+            RecordHead head{};
+            head.magic = kRecordMagic;
+            head.levelCount = uint32_t(entry.levels.size());
+            head.key = entry.key;
+            head.vkFormat = entry.vkFormat;
+            head.bytesPerBlock = entry.bytesPerBlock;
+            head.payloadBytes = entry.payloadBytes;
+            head.check = CheckOf(head);
+            const size_t levelBytes = entry.levels.size() * sizeof(StoredLevel);
+            const uint64_t total = sizeof head + levelBytes + entry.payloadBytes;
+            uint64_t at = 0;
+            bool reserved = false;
             {
                 std::lock_guard<std::mutex> hold(s.lock);
-                if (s.index.count(entry.key.hash) || s.end + job.second.size() > s.limit)
-                    continue;
-                at = s.end;
-                s.end += job.second.size();
+                if (!s.index.count(entry.key.hash) && s.end + total <= s.limit)
+                {
+                    at = s.end;
+                    s.end += total;
+                    reserved = true;
+                }
             }
+            // Already kept, or the file is full: nothing to write.
+            if (!reserved) { Recycle(s, std::move(job.payload)); continue; }
             // The head goes last, so a record is only found once all of it is there.
-            const size_t headBytes = sizeof(RecordHead);
-            if (!WriteAll(s.fd, job.second.data() + headBytes, job.second.size() - headBytes,
-                          at + headBytes) ||
-                !WriteAll(s.fd, job.second.data(), headBytes, at))
+            if (!WriteAll(s.fd, job.payload.data(), job.payload.size(),
+                          at + sizeof head + levelBytes) ||
+                (levelBytes && !WriteAll(s.fd, entry.levels.data(), levelBytes, at + sizeof head)) ||
+                !WriteAll(s.fd, &head, sizeof head, at))
             {
                 LOGW("texstore: a write failed; the store stops growing");
-                std::lock_guard<std::mutex> hold(s.lock);
-                s.limit = 0;
+                {
+                    std::lock_guard<std::mutex> hold(s.lock);
+                    s.limit = 0;
+                }
+                Recycle(s, std::move(job.payload));
                 continue;
             }
-            entry.payloadAt = at + headBytes + entry.levels.size() * sizeof(StoredLevel);
-            std::lock_guard<std::mutex> hold(s.lock);
-            s.index[entry.key.hash] = std::move(entry);
-            s.saved++;
-            s.savedBytes += job.second.size();
+            entry.payloadAt = at + sizeof head + levelBytes;
+            {
+                std::lock_guard<std::mutex> hold(s.lock);
+                s.index[entry.key.hash] = std::move(entry);
+                s.saved++;
+                s.savedBytes += total;
+            }
+            Recycle(s, std::move(job.payload));
         }
     }
 
@@ -261,7 +326,7 @@ namespace
     {
         const char* path = env::Text("PES17_TEXTURE_STORE");
         if (!path || !*path) return;
-        s.limit = env::Number("PES17_TEXTURE_STORE_MB", 1024) << 20;
+        s.limit = env::Number("PES17_TEXTURE_STORE_MB", kDefaultStoreMB) << 20;
         s.fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
         if (s.fd < 0) { LOGW("texstore: cannot open %s", path); return; }
         struct stat st{};
@@ -295,7 +360,7 @@ namespace
              (unsigned long long)(s.end >> 20),
              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
         s.ready.store(true, std::memory_order_release);
-        ReadThrough(s, s.end);
+        ReadAhead(s, s.end);
         WriterLoop();
     }
 }
@@ -387,29 +452,35 @@ void vk::texstore::Save(const gpu::TextureData& source, uint32_t xenosFormat, ui
                                  level.blocksHigh, level.layers, level.offset, level.size });
     if (entry.levels.size() > 32) return;
 
-    RecordHead head{};
-    head.magic = kRecordMagic;
-    head.levelCount = uint32_t(entry.levels.size());
-    head.key = entry.key;
-    head.vkFormat = vkFormat;
-    head.bytesPerBlock = entry.bytesPerBlock;
-    head.payloadBytes = entry.payloadBytes;
-    head.check = CheckOf(head);
-
     const size_t levelBytes = entry.levels.size() * sizeof(StoredLevel);
-    const size_t total = sizeof head + levelBytes + converted.bytes.size();
+    const size_t total = sizeof(RecordHead) + levelBytes + size_t(entry.payloadBytes);
+
+    // One copy of the payload, into a buffer the writer has already finished
+    // with. The writer cannot read `converted` itself: it lives in the decoder's
+    // scratch, which the next texture overwrites, so a copy is due either way --
+    // but an allocation of the whole image per texture, on top of it, was most
+    // of what a Save cost. The header and levels are not copied at all; the
+    // writer makes the head from the entry.
+    std::vector<uint8_t> payload;
     {
         std::lock_guard<std::mutex> hold(s.queueLock);
-        if (s.queuedBytes + total > kQueueMost) { s.dropped++; return; }
+        if (!s.spare.empty())
+        {
+            payload = std::move(s.spare.back());
+            s.spare.pop_back();
+        }
     }
-    std::vector<uint8_t> record(total);
-    std::memcpy(record.data(), &head, sizeof head);
-    if (levelBytes) std::memcpy(record.data() + sizeof head, entry.levels.data(), levelBytes);
-    std::memcpy(record.data() + sizeof head + levelBytes, converted.bytes.data(), converted.bytes.size());
+    payload.assign(converted.bytes.begin(), converted.bytes.end());
     {
         std::lock_guard<std::mutex> hold(s.queueLock);
+        if (s.queuedBytes + total > kQueueMost)
+        {
+            s.dropped++;
+            if (s.spare.size() < kSpareMost) { payload.clear(); s.spare.push_back(std::move(payload)); }
+            return;
+        }
         s.queuedBytes += total;
-        s.queue.emplace_back(std::move(entry), std::move(record));
+        s.queue.push_back(Job{ std::move(entry), std::move(payload) });
     }
     s.wake.notify_one();
 }
