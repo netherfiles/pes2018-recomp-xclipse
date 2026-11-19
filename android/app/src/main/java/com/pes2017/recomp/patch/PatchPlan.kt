@@ -3,6 +3,7 @@ package com.pes2017.recomp.patch
 import java.io.IOException
 
 enum class PatchScanFailure {
+    NO_PACKAGES,
     WRONG_TITLE,
     NO_DPFILELIST,
     SINGLE_CPK_WITHOUT_LIST,

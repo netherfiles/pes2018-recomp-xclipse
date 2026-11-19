@@ -31,7 +31,8 @@ class PatchScanner(private val scratchDir: File) {
         val skipped = ArrayList<SkippedItem>()
         val warnings = ArrayList<String>()
         var dpFileList: DpCandidate? = null
-        var sawTitle = false
+        var packages = 0
+        var titlePackages = 0
 
         try {
             val session = source.openSession()
@@ -40,7 +41,6 @@ class PatchScanner(private val scratchDir: File) {
                     val entry = session.next() ?: break
                     if (entry.isDirectory) continue
                     val insideTitle = inTitleTree(entry.path)
-                    if (insideTitle) sawTitle = true
 
                     val stream = try {
                         session.open()
@@ -60,6 +60,8 @@ class PatchScanner(private val scratchDir: File) {
                             )
                             continue
                         }
+                        packages++
+                        if (insideTitle) titlePackages++
                         if (!insideTitle) {
                             val outsideName = entry.path.substringAfterLast('/')
                             if (hasSegment(entry.path, "FFFE07D1")) {
@@ -115,7 +117,7 @@ class PatchScanner(private val scratchDir: File) {
                                 )
                                 continue
                             }
-                            sawTitle = true
+                            titlePackages++
                             val missing = PREFIX_BYTES - head.size
                             if (missing > 0) {
                                 head += readUpTo(stream, missing)
@@ -199,7 +201,12 @@ class PatchScanner(private val scratchDir: File) {
             temps.forEach { runCatching { it.delete() } }
         }
 
-        if (!sawTitle) {
+        if (packages == 0) {
+            throw PatchScanException(
+                PatchScanFailure.NO_PACKAGES,
+                "no Xbox 360 packages in ${source.label}",
+            )
+        } else if (titlePackages == 0) {
             throw PatchScanException(
                 PatchScanFailure.WRONG_TITLE,
                 "no content under title 4A3007D3 was found in ${source.label}",

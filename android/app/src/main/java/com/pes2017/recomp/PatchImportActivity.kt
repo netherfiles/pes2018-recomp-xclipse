@@ -67,7 +67,7 @@ class PatchImportActivity : AppCompatActivity() {
 
     private enum class ResultKind {
         SUCCESS, CANCELLED, FAILED, CORRUPT, MISSING_PART, WRONG_TITLE, NO_DPFILELIST,
-        INTERRUPTED
+        NO_PACKAGES, INTERRUPTED
     }
 
     /**
@@ -591,6 +591,7 @@ class PatchImportActivity : AppCompatActivity() {
     private fun showScanFailure(e: PatchScanException) {
         val kind = when (e.failure) {
             PatchScanFailure.WRONG_TITLE -> ResultKind.WRONG_TITLE
+            PatchScanFailure.NO_PACKAGES -> ResultKind.NO_PACKAGES
             PatchScanFailure.NO_DPFILELIST,
             PatchScanFailure.SINGLE_CPK_WITHOUT_LIST,
             -> ResultKind.NO_DPFILELIST
@@ -1455,6 +1456,13 @@ class PatchImportActivity : AppCompatActivity() {
             ResultKind.NO_DPFILELIST -> {
                 title = R.string.patch_import_result_no_dpfilelist
                 body = R.string.patch_import_result_no_dpfilelist_body
+                badge = R.string.patch_import_badge_warning
+                tone = Tone.WARN
+            }
+
+            ResultKind.NO_PACKAGES -> {
+                title = R.string.patch_import_result_no_packages
+                body = R.string.patch_import_result_no_packages_body
                 badge = R.string.patch_import_badge_warning
                 tone = Tone.WARN
             }

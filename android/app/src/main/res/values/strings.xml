@@ -506,7 +506,9 @@
     <string name="patch_import_result_wrong_title">NOT A PES 2018 PATCH</string>
     <string name="patch_import_result_wrong_title_body">This source does not carry the PES 2018 title data. Check that you picked the patch, not a stadium or scoreboard add-on.</string>
     <string name="patch_import_result_no_dpfilelist">NO DPFILELIST</string>
-    <string name="patch_import_result_no_dpfilelist_body">The data pack has no DpFileList, so the game will not load its CPK files. Install anyway only if the patch says to add one by hand.</string>
+    <string name="patch_import_result_no_dpfilelist_body">The data pack has no DpFileList, so the game will not load its CPK files. Use a pack that includes the list.</string>
+    <string name="patch_import_result_no_packages">NOT AN XBOX PACK</string>
+    <string name="patch_import_result_no_packages_body">No Xbox 360 packages found. Use the pack as downloaded; a PC or PES 2017 pack does not work here.</string>
     <string name="patch_import_result_done">DONE</string>
     <string name="patch_import_result_note">Installed into the game folder. The previous data is in RESTORE PREVIOUS when a backup was kept.</string>
     <string name="patch_import_badge_installed">INSTALLED</string>

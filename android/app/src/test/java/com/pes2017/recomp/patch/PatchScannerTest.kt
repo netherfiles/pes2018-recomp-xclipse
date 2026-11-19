@@ -177,6 +177,34 @@ class PatchScannerTest {
     }
 
     @Test
+    fun looseFilesWithoutAnyPackageAreReportedAsNoPackages() {
+        val zip = zip("Patch CPK/TEST.cpk" to SyntheticStfs.cpkPayload(0x300))
+        expectFailure(PatchScanFailure.NO_PACKAGES, zip)
+    }
+
+    @Test
+    fun patchShapedPackageUnderTheTitleTreeWithAnotherTitleIsRejected() {
+        val cpkCon = SyntheticStfs.build(
+            temp.newFile("cpk-con-other-title"),
+            titleId = 0x5A3007D3L,
+            specs = listOf(SyntheticStfs.Spec("test.cpk", SyntheticStfs.cpkPayload(0x300))),
+        ).readBytes()
+        val zip = zip("$titleRoot/TEST.cpk" to cpkCon)
+        expectFailure(PatchScanFailure.WRONG_TITLE, zip)
+    }
+
+    @Test
+    fun titleUpdateOnlySourceIsRejectedWithoutDpFileList() {
+        val tu = SyntheticStfs.build(
+            temp.newFile("tu-only"),
+            contentType = 0xB0000,
+            specs = listOf(SyntheticStfs.Spec("default.xexp", ByteArray(16))),
+        ).readBytes()
+        val zip = zip("$titleRoot/000B0000/tu0000000E_00000000" to tu)
+        expectFailure(PatchScanFailure.NO_DPFILELIST, zip)
+    }
+
+    @Test
     fun unknownHeaderInsideTitleIsRejected() {
         val bytes = ByteArray(0x4000)
         "CON ".toByteArray(Charsets.ISO_8859_1).copyInto(bytes, 0)
