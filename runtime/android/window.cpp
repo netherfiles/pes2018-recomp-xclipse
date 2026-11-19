@@ -132,7 +132,8 @@ namespace android::detail
     // an application that stops answering.
     void DestroyWindow()
     {
-        vk::pipeline::SaveCache();
+        // The UI thread may not wait for a save or for a pipeline compile.
+        vk::pipeline::SaveCache(false);
         ANativeWindow* going = nullptr;
         {
             std::lock_guard lock(g_lock);

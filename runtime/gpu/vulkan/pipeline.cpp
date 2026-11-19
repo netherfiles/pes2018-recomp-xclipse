@@ -10,7 +10,7 @@
 // that never comes up, because that is what a machine with no GPU gives them.
 bool vk::pipeline::Initialise(void*, void*, void*, uint32_t, void*) { return false; }
 void vk::pipeline::Shutdown() {}
-void vk::pipeline::SaveCache() {}
+bool vk::pipeline::SaveCache(bool) { return false; }
 void vk::pipeline::SaveCacheThrottled() {}
 void vk::pipeline::FlushCache() {}
 bool vk::pipeline::Ready() { return false; }
@@ -51,6 +51,8 @@ void vk::pipeline::OnDeviceLost(void (*)(const char*)) {}
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -823,6 +825,9 @@ namespace
             if (const char* path = CachePath())
             {
                 LOGI("pipeline: checking persistent pipeline cache at: %s", path);
+                // A save cut short (the process killed) leaves its temporary file
+                // behind; nothing reads it, so it is only stale megabytes.
+                std::remove((std::string(path) + ".tmp").c_str());
                 if (std::FILE* f = std::fopen(path, "rb"))
                 {
                     std::fseek(f, 0, SEEK_END);
@@ -891,23 +896,55 @@ namespace
         }
     }
 
-    void SaveCache()
+    // The one writer of the cache file. Two threads writing `path + ".tmp"` at
+    // once made one rename lose, and the loser then deleted the winner's blob.
+    std::timed_mutex& SaveMutex()
+    {
+        static std::timed_mutex m;
+        return m;
+    }
+
+    // Returns true only when the file on disk holds the blob copied below.
+    bool SaveCache(bool wait)
     {
         // Do not persist cache blobs to disk on Mali by default --
         // in-session use only. PES17_PERSIST_PIPELINE_CACHE=1 keeps saving.
-        if (!PersistCache()) return;
+        if (!PersistCache()) return false;
         const char* path = CachePath();
-        if (!path || !g.cache) return;
+        if (!path) return false;
+
+        // The save mutex comes first and the cache mutex inside it, so a save
+        // that is waiting to write never sits on a lock every compile needs.
+        std::unique_lock<std::timed_mutex> save(SaveMutex(), std::defer_lock);
+        if (wait ? !save.try_lock_for(std::chrono::seconds(2)) : !save.try_lock()) return false;
+
         // The driver's blob is copied under the lock the compiles also take, and
         // the file is written after it is let go: a 2 MB write to flash held a
         // lock every pipeline build waits on, and a draw waits on those.
         std::vector<uint8_t> data;
         {
-            std::lock_guard lock(vk::pipeline::CacheMutex());
+            std::unique_lock<std::timed_mutex> cache(vk::pipeline::CacheMutex(), std::defer_lock);
+            if (wait ? !cache.try_lock_for(std::chrono::seconds(2)) : !cache.try_lock()) return false;
+            // Checked again under the lock: a shutdown may have destroyed either
+            // of these since this save started.
+            if (!g.device || !g.cache) return false;
             size_t size = 0;
-            if (vkGetPipelineCacheData(g.device, g.cache, &size, nullptr) != VK_SUCCESS || !size) return;
+            VkResult r = vkGetPipelineCacheData(g.device, g.cache, &size, nullptr);
+            if (r != VK_SUCCESS || !size)
+            {
+                if (r != VK_SUCCESS)
+                    LOGW("pipeline: cache not saved: vkGetPipelineCacheData (size) returned %d (%s)",
+                         int(r), Explain(r));
+                return false;
+            }
             data.resize(size);
-            if (vkGetPipelineCacheData(g.device, g.cache, &size, data.data()) != VK_SUCCESS) return;
+            r = vkGetPipelineCacheData(g.device, g.cache, &size, data.data());
+            if (r != VK_SUCCESS)
+            {
+                LOGW("pipeline: cache not saved: vkGetPipelineCacheData returned %d (%s) for %zu bytes",
+                     int(r), Explain(r), size);
+                return false;
+            }
             data.resize(size);
         }
         const size_t size = data.size();
@@ -918,23 +955,41 @@ namespace
         header.driverVersion = g.deviceProperties.driverVersion;
         std::memcpy(header.pipelineCacheUUID, g.deviceProperties.pipelineCacheUUID, VK_UUID_SIZE);
         header.dataSize = size;
+        const size_t total = size + sizeof(header);
 
-        std::string tmpPath = std::string(path) + ".tmp";
-        if (std::FILE* f = std::fopen(tmpPath.c_str(), "wb"))
+        const std::string tmpPath = std::string(path) + ".tmp";
+        std::FILE* f = std::fopen(tmpPath.c_str(), "wb");
+        if (!f)
         {
-            const size_t writtenHdr = std::fwrite(&header, sizeof(header), 1, f);
-            const size_t writtenData = std::fwrite(data.data(), 1, size, f);
-            const int closed = std::fclose(f);
-            if (writtenHdr == 1 && writtenData == size && closed == 0 && std::rename(tmpPath.c_str(), path) == 0)
-            {
-                LOGI("pipeline: wrote verified %zu KB pipeline cache to %s", (size + sizeof(header)) / 1024, path);
-            }
-            else
-            {
-                std::remove(tmpPath.c_str());
-                LOGW("pipeline: failed to write pipeline cache to %s", path);
-            }
+            const int error = errno;
+            LOGW("pipeline: cache not saved: fopen(%s) failed, errno %d (%s); %zu bytes",
+                 tmpPath.c_str(), error, std::strerror(error), total);
+            return false;
         }
+        const size_t writtenHdr = std::fwrite(&header, sizeof(header), 1, f);
+        const size_t writtenData = std::fwrite(data.data(), 1, size, f);
+        const int writeError = std::ferror(f) ? errno : 0;
+        const int closed = std::fclose(f);
+        if (writtenHdr != 1 || writtenData != size || closed != 0)
+        {
+            const int error = writeError ? writeError : errno;
+            LOGW("pipeline: cache not saved: fwrite header %zu/1, payload %zu/%zu (ferror %d),"
+                 " fclose %d, errno %d (%s); %s discarded",
+                 writtenHdr, writtenData, size, writeError ? 1 : 0, closed, error, std::strerror(error),
+                 tmpPath.c_str());
+            std::remove(tmpPath.c_str());
+            return false;
+        }
+        if (std::rename(tmpPath.c_str(), path) != 0)
+        {
+            const int error = errno;
+            LOGW("pipeline: cache not saved: rename(%s -> %s) failed, errno %d (%s); %zu bytes discarded",
+                 tmpPath.c_str(), path, error, std::strerror(error), total);
+            std::remove(tmpPath.c_str());
+            return false;
+        }
+        LOGI("pipeline: wrote %zu KB pipeline cache to %s", total / 1024, path);
+        return true;
     }
 
     VkShaderModule MakeModule(const uint32_t* spirv, size_t words, VkResult& result)
@@ -997,11 +1052,17 @@ void vk::pipeline::Shutdown()
 {
     if (!g.device) return;
     SaveCache();
-    if (g.cache) vkDestroyPipelineCache(g.device, g.cache, nullptr);
+    {
+        // The nulling is inside the lock a save holds to copy the blob, so a
+        // save on another thread sees no cache rather than a destroyed handle.
+        // Deliberately not the save mutex: destroying the cache is not a write.
+        std::lock_guard lock(vk::pipeline::CacheMutex());
+        if (g.cache) vkDestroyPipelineCache(g.device, g.cache, nullptr);
+        g.cache = VK_NULL_HANDLE;
+    }
     if (g.layout) vkDestroyPipelineLayout(g.device, g.layout, nullptr);
     for (VkDescriptorSetLayout& set : g.sets)
         if (set) { vkDestroyDescriptorSetLayout(g.device, set, nullptr); set = VK_NULL_HANDLE; }
-    g.cache = VK_NULL_HANDLE;
     g.layout = VK_NULL_HANDLE;
     if (g.ownsDevice)
     {
@@ -1052,7 +1113,7 @@ bool     vk::pipeline::BcFormatSampled(uint32_t xenosFormat)
     }
 }
 std::mutex& vk::pipeline::QueueMutex() { static std::mutex m; return m; }
-std::mutex& vk::pipeline::CacheMutex() { static std::mutex m; return m; }
+std::timed_mutex& vk::pipeline::CacheMutex() { static std::timed_mutex m; return m; }
 std::mutex& vk::pipeline::CreationMutex() { static std::mutex m; return m; }
 void*    vk::pipeline::SetLayout(uint32_t set) { return set < 3 ? g.sets[set] : nullptr; }
 void*    vk::pipeline::Layout() { return g.layout; }
@@ -1064,7 +1125,7 @@ void*    vk::pipeline::Cache()
     if (noCache) return nullptr;
     return g.cache;
 }
-void     vk::pipeline::SaveCache() { ::SaveCache(); }
+bool     vk::pipeline::SaveCache(bool wait) { return ::SaveCache(wait); }
 
 // What the warmup worker calls after a compile: at most one write in 30 s. The
 // blob only grows, so skipping one loses nothing but the last few pipelines, and
@@ -1085,16 +1146,19 @@ void vk::pipeline::SaveCacheThrottled()
     g_cacheDirty.store(true, std::memory_order_relaxed);
     const int64_t now = NowMs();
     if (now - g_lastCacheSaveMs.load(std::memory_order_relaxed) < 30000) return;
+    // A save skipped because a compile or another writer held the cache leaves
+    // both the dirty flag and the clock alone, so the next compile tries again.
+    if (!::SaveCache(false)) return;
     g_lastCacheSaveMs.store(now, std::memory_order_relaxed);
     g_cacheDirty.store(false, std::memory_order_relaxed);
-    ::SaveCache();
 }
 
 void vk::pipeline::FlushCache()
 {
-    if (!g_cacheDirty.exchange(false, std::memory_order_relaxed)) return;
+    if (!g_cacheDirty.load(std::memory_order_relaxed)) return;
+    if (!::SaveCache(true)) return;
+    g_cacheDirty.store(false, std::memory_order_relaxed);
     g_lastCacheSaveMs.store(NowMs(), std::memory_order_relaxed);
-    ::SaveCache();
 }
 
 bool vk::pipeline::CreateModule(const uint32_t* spirv, size_t words, const char** error)

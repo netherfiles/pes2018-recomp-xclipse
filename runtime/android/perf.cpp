@@ -469,7 +469,8 @@ void android::perf::RestoreMemory()
 
 void android::perf::TrimMemory(int level)
 {
-    vk::pipeline::SaveCache();
+    // The UI thread may not wait for a save or for a pipeline compile.
+    vk::pipeline::SaveCache(false);
     const uint64_t budget = vk::textures::Budget();
     if (budget && !g_fullTextureBudget) g_fullTextureBudget = budget;
 

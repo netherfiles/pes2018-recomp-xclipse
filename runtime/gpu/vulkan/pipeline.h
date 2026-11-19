@@ -69,7 +69,8 @@ namespace vk::pipeline
     // The device has one queue, and the window thread and the GPU thread both
     // submit to it; Vulkan requires a queue to be externally synchronised.
     std::mutex& QueueMutex();
-    std::mutex& CacheMutex();
+    // Timed: a save that may wait takes it for a bounded time only.
+    std::timed_mutex& CacheMutex();
     std::mutex& CreationMutex();
 
     // A VkResult that is not VK_SUCCESS. VK_ERROR_DEVICE_LOST also ends the run,
@@ -86,7 +87,12 @@ namespace vk::pipeline
     void* SetLayout(uint32_t set);
     void* Layout();
     void* Cache();
-    void  SaveCache();
+    // Writes the cache blob to disk, serialised against every other writer.
+    // A caller that must not block (the UI thread, the warmup worker) passes
+    // false: it skips the save when one is in flight or a compile holds the
+    // cache. The rest wait up to two seconds each and skip after that.
+    // Returns whether the file was written.
+    bool  SaveCache(bool wait = true);
     // At most one write in 30 s, for the warmup worker; FlushCache writes what is pending.
     void  SaveCacheThrottled();
     void  FlushCache();
