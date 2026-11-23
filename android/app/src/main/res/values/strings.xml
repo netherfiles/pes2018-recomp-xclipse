@@ -243,7 +243,7 @@
     <string name="exp_dynamic_depth">Per-draw depth state on Adreno</string>
     <string name="exp_dynamic_depth_hint">Sets depth, stencil and culling per draw instead of baking them into pipelines (Qualcomm default is baked).</string>
     <string name="exp_sync_large">Compile large pipelines in the frame</string>
-    <string name="exp_sync_large_hint">Experimental, off by default. Builds a blocked large draw\'s pipeline when the draw needs it, one a frame, and gives up if a build takes too long. Takes effect at the next start.</string>
+    <string name="exp_sync_large_hint">Experimental, off by default. May build a blocked large draw\'s pipeline on the frame that needs it, paced and capped for the session, and gives up if a build takes too long. Takes effect at the next start.</string>
     <string name="section_testing">Testing</string>
     <string name="section_developer">Developer</string>
     <string name="developer_tools">Developer tools</string>
