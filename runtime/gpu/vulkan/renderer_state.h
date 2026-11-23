@@ -512,7 +512,8 @@ namespace vk::renderer::detail
         // How long the last finished frame took: a frame already long has room
         // for one pipeline build, a 60 Hz one does not.
         uint64_t lastFrameNanoseconds = 0;
-        // The frame a sync compile succeeded in, so no frame pays for two.
+        // The frame a sync compile succeeded in, so the switch path does not pay
+        // for two in one frame; a first-draw build is not capped that way.
         uint64_t lastSyncFrame = UINT64_MAX;
         // The window's counters, printed in the 600-swap line before `skipped:`
         // and reset there with lastDraws; the breaker is latched for the rest of
@@ -956,16 +957,20 @@ namespace vk::renderer::detail
         // passed (8 x that build's time, 20 ms at least), this frame has not spent
         // over 40 ms on sync builds, the session has 5000 ms and 100 attempts
         // left, and the key is not denied -- a driver memory failure may retry
-        // once, 30 frames later; a rejection is permanent. A read of the pacing
-        // (only a refusal is written, once a session): the attempt is charged by
+        // once, 30 frames later; a rejection is permanent. firstDraw, the first
+        // draw into a target, skips the cooldown and the frame cap: a single
+        // build is not the run of them those pace. A read of the pacing (only a
+        // refusal is written, once a session): the attempt is charged by
         // NoteSyncCompile. A build over 150 ms latches State::syncBroken for the
-        // rest of the session, once.
-        bool SyncCompileAllowed(const PipelineKey& key);
+        // rest of the session, once, unless it was a firstDraw build.
+        bool SyncCompileAllowed(const PipelineKey& key, bool firstDraw);
         // True once this frame has spent over 40 ms on sync builds. Also asked by
         // SyncCompileAllowed; the draw asks first, before the build lock.
         bool SyncFrameCapped();
+        // Charges the attempt. firstDraw exempts the build from the breaker latch
+        // only: it still spends the budget and sets the cooldown.
         void NoteSyncCompile(const PipelineKey& key, uint32_t targetWidth, bool built,
-                             uint32_t elapsedMs, SyncFail reason);
+                             uint32_t elapsedMs, SyncFail reason, bool firstDraw);
         // The session's sync spend, for the 600-swap perf line.
         void SyncCompileSpend(uint32_t& totalMs, uint32_t& attempts);
         // Forgets the last run: Shutdown calls it, since State is static.

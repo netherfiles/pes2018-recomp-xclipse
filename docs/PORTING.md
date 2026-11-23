@@ -257,6 +257,7 @@ Tools added:
 - Two other fixes for black players:
   - Write-backs for a destination resolved in many recent frames are skipped (per-frame effects).
   - Pipelines for small off-screen targets (kit drawing, the crowd atlas) compile synchronously, because a skipped one-time composition is lost for good.
+  - The same holds, by default and without the switch, for the first draw into an off-screen target 640 px wide or more: the composition happens once, and a skipped one is never drawn again.
 - `tools/kits.sh [dumps] [gap]` checks it. It merges several frame dumps (each player draw's kit texture with its average colour) and reads the load-time `kitcompose` log, so every person is counted on camera or not. More than 10 of a team colour in one frame is a definite error.
 
 **Crowd.** Still missing. Found and fixed on the way:

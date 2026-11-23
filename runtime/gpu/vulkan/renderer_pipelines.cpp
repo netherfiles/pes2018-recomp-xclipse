@@ -567,11 +567,15 @@ namespace vk::renderer::detail
 
 
         // ---- the sync-compile experiment (PES17_SYNC_LARGE_PIPELINES) ----
-        // How much the experiment may cost: a build on the frame that needs it is
-        // a frame the player sees, so it is paced, capped, and stops itself when
-        // one build is long enough to be a freeze in its own right. The cooldown
-        // grows with the build that set it; a frame may accumulate only so much;
-        // and the session spends 5000 ms or 100 builds before it gives up.
+        // Two paths build a missing pipeline on the frame that needs it, costed
+        // differently. The experiment's switch path -- a large draw on a frame
+        // already slow -- is a frame the player sees, so it is paced, capped,
+        // and stops itself when one build is long enough to be a freeze in its
+        // own right: the cooldown grows with the build that set it, a frame may
+        // accumulate only so much, and the session spends 5000 ms or 100 builds
+        // before it gives up. The first-draw path is the default, needs no
+        // switch, and is not paced: no cooldown, no per-frame cap and no breaker
+        // latch, only the session budget, the denylist and the retry wait.
         constexpr uint32_t kSyncBudgetMs = 5000, kSyncBudgetAttempts = 100;
         constexpr uint32_t kSyncBreakerMs = 150;
         // After a build, the next may start kSyncCooldownFactor times that
@@ -631,9 +635,12 @@ namespace vk::renderer::detail
         }
 
         // A read of the pacing; the attempt is charged by NoteSyncCompile once
-        // it has been made, so asking twice costs nothing. A refusal is logged
-        // once a session, which is the only thing this writes.
-        bool SyncCompileAllowed(const PipelineKey& key)
+        // it has been made, so asking twice costs nothing. firstDraw is the
+        // first draw into a target: the cooldown and the frame cap pace a run
+        // of builds and are not asked about it; the denylist, the retry wait
+        // and the session budget still are. A refusal is logged once a
+        // session, which is the only thing this writes.
+        bool SyncCompileAllowed(const PipelineKey& key, bool firstDraw)
         {
             const auto failed = g_sync.failed.find(key);
             if (failed != g_sync.failed.end())
@@ -674,7 +681,7 @@ namespace vk::renderer::detail
                 }
                 return false;
             }
-            if (std::chrono::steady_clock::now() < g_sync.cooldownUntil)
+            if (!firstDraw && std::chrono::steady_clock::now() < g_sync.cooldownUntil)
             {
                 if (!g_sync.loggedCooldown)
                 {
@@ -683,11 +690,11 @@ namespace vk::renderer::detail
                 }
                 return false;
             }
-            return !SyncFrameCapped();
+            return firstDraw || !SyncFrameCapped();
         }
 
         void NoteSyncCompile(const PipelineKey& key, uint32_t targetWidth, bool built,
-                             uint32_t elapsedMs, SyncFail reason)
+                             uint32_t elapsedMs, SyncFail reason, bool firstDraw)
         {
             // A lost race spent nothing: another thread is building this key,
             // and the draw skips this frame as it would have.
@@ -706,12 +713,26 @@ namespace vk::renderer::detail
             g_sync.accumMs += elapsedMs;
             if (built)
             {
-                // One sync build a frame, and the draw goes on to use it.
+                // The draw goes on to use it. One sync build a frame is the
+                // switch path's rule; a first-draw build is bounded by the
+                // session budget, the denylist and the retry wait instead, with
+                // no per-frame cap, no cooldown and no breaker, so a frame may
+                // hold more than one.
                 g.syncOk++;
                 g.lastSyncFrame = g.frames;
                 g_sync.failed.erase(key);
                 g_sync.cooldownUntil = std::chrono::steady_clock::now() +
                     std::chrono::milliseconds(std::max(kSyncCooldownFactor * elapsedMs, kSyncCooldownFloorMs));
+                // The first draw's build is rare enough (about one a match) to
+                // report every time: the once-a-session line below may have gone
+                // to another build, hiding the one the kit needed.
+                if (firstDraw)
+                {
+                    LOGI("renderer: first-draw pipeline built: %016llX/%016llX into a %u px"
+                         " surface in %u ms",
+                         (unsigned long long)key.vertexShader,
+                         (unsigned long long)key.pixelShader, targetWidth, elapsedMs);
+                }
                 if (!g_sync.logged)
                 {
                     g_sync.logged = true;
@@ -738,7 +759,11 @@ namespace vk::renderer::detail
                 info.lastFailFrame = g.frames;
                 info.retries++;
             }
-            if (elapsedMs > kSyncBreakerMs && !g.syncBroken)
+            // A first-draw build that is slow still charges the budget and sets
+            // its cooldown; only the latch is withheld. A composition the title
+            // never repeats matters more than the session-wide latch, and the
+            // 5000 ms budget already bounds it.
+            if (elapsedMs > kSyncBreakerMs && !g.syncBroken && !firstDraw)
             {
                 // The frame is finished normally and the pipeline, if it was made,
                 // is drawn; nothing more is compiled on the render thread.

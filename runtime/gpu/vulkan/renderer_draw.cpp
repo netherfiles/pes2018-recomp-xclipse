@@ -1402,6 +1402,46 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         built = EnsurePipeline(key, *vertex, *pixel, &newPipeline);
         if (!built) { NoteSkippedDraw(key, *colourTarget); Skip("pipeline rejected"); return; }
     }
+    // The surface of the match itself -- Exhibition's is 1040x1024 32_FLOAT in
+    // the 2026-11-23 trace -- is composed once in the same way: the first draw
+    // into it was skipped with draws 0, and the kit it writes was never drawn
+    // again, leaving one player black for the whole match until leaving the
+    // menu made a new target and drew it again. draws counts the draws recorded
+    // into this instance of the target, incremented only when one is really
+    // recorded, a draw with no colour included; a skipped draw does not raise
+    // it. A target whose every draw was skipped therefore stays at 0, and this
+    // rule comes back on the next frame until it succeeds or the budget or the
+    // denylist stops it -- the retry wanted, not a bug. A target evicted and
+    // made again starts from 0. Build it now unless the session says no
+    // (budget, denylist, retry wait). The breaker is not asked: a slow build on
+    // the switch path must not switch this rule off before the kit is made,
+    // and the 5000 ms budget bounds it anyway. The cooldown and the frame cap
+    // pace a run of builds, and this is a single one. The small surfaces above
+    // are built unconditionally already, so only a large one reaches this.
+    // A refusal or a lost race is permanent here: the kit is composed once,
+    // there is no second draw, so the surface is never drawn again. If the
+    // worker happens to be building the key (IsBuilding), this rule stands down
+    // and the draw is lost the same way; the <640 rule does not wait for a
+    // build in progress either. That is rare, since a key with rec 0 is never
+    // prewarmed and the worker only starts one after an earlier skip.
+    if (!built && colourTarget->width >= 640 && colourTarget->draws == 0 &&
+        !warmup::IsBuilding(key) && warmup::SyncCompileAllowed(key, /*firstDraw=*/true))
+    {
+        const auto began = std::chrono::steady_clock::now();
+        warmup::SyncFail reason = warmup::SyncFail::None;
+        {
+            Stopwatch watch(g.pipelineNanoseconds);
+            built = EnsurePipelineSync(key, *vertex, *pixel, &newPipeline, &reason);
+        }
+        const uint32_t tookMs = uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - began).count());
+        // Built: drawn below, and not enqueued. Not built: the enqueue and skip
+        // below, and NoteSyncCompile records why. There is no retry from here:
+        // the draw is the surface's only one, so a refusal is not a wait for
+        // the next frame.
+        warmup::NoteSyncCompile(key, colourTarget->width, built != nullptr, tookMs, reason,
+                                /*firstDraw=*/true);
+    }
     // The same for a draw into a surface the size of the frame -- the world
     // pass, its composite: skipped while the pipeline compiles, it leaves a hole
     // (the reporter's green block). PES17_SYNC_LARGE_PIPELINES builds it on the
@@ -1421,7 +1461,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         if (syncLargePipelines && !g.syncBroken && g.frames != g.lastSyncFrame &&
             g.lastFrameNanoseconds >= kSlowFrameNanoseconds &&
             !warmup::SyncFrameCapped() && !warmup::IsBuilding(key) &&
-            warmup::SyncCompileAllowed(key))
+            warmup::SyncCompileAllowed(key, /*firstDraw=*/false))
         {
             const auto began = std::chrono::steady_clock::now();
             warmup::SyncFail reason = warmup::SyncFail::None;
@@ -1434,7 +1474,8 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
             // Built: drawn below, and not enqueued. Not built: the enqueue and
             // skip below; NoteSyncCompile records why, and whether this key is
             // tried again (not after losing the race to the background worker).
-            warmup::NoteSyncCompile(key, colourTarget->width, built != nullptr, tookMs, reason);
+            warmup::NoteSyncCompile(key, colourTarget->width, built != nullptr, tookMs, reason,
+                                    /*firstDraw=*/false);
         }
     }
     if (!built)
