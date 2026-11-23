@@ -651,6 +651,12 @@ void vk::renderer::Shutdown()
     g.setupCommands = VK_NULL_HANDLE;
     for (State::Slot& slot : g.slots) slot = State::Slot{};
     g.recording = false;
+    // The sync experiment's spending, denials and latch describe this run; a
+    // later Initialise starts a new one. State is static, so nothing else clears
+    // them.
+    warmup::ResetSyncCompile();
+    // The skip report describes this run's draws and this run's shader cache.
+    ResetSkipDiagnostics();
     g.device = VK_NULL_HANDLE;
 }
 

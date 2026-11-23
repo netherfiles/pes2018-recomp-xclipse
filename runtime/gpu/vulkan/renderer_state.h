@@ -102,6 +102,9 @@ namespace vk::renderer::detail
         VkFormat format = VK_FORMAT_UNDEFINED;
         uint32_t guestFormat = 0;   // for the report
         uint32_t width = 0, height = 0;
+        // The EDRAM tile and pitch it was made for, kept for the skip report: a
+        // surface that is not the swapchain has no other place to say so.
+        uint32_t tile = 0, pitch = 0;
         // The scene render scale (State::sceneScale) for a full-frame surface,
         // 1 for the rest: the image is HostOf(width, scale) wide.
         float scale = 1.0f;
@@ -512,7 +515,9 @@ namespace vk::renderer::detail
         // The frame a sync compile succeeded in, so no frame pays for two.
         uint64_t lastSyncFrame = UINT64_MAX;
         // The window's counters, printed in the 600-swap line before `skipped:`
-        // and reset there with lastDraws; the breaker is latched for the session.
+        // and reset there with lastDraws; the breaker is latched for the rest of
+        // the session and reset only by Shutdown, so a later Initialise starts
+        // unlatched.
         uint32_t syncAttempts = 0, syncOk = 0, syncTotalMs = 0, syncMaxMs = 0;
         bool syncBroken = false;
 
@@ -539,6 +544,55 @@ namespace vk::renderer::detail
         size_t pipelineCount = 0, shaderCount = 0;
         // By reason. Every reason is a string literal, so its address is its key.
         std::unordered_map<const char*, uint64_t> skipped;
+
+        // ---- the skip report (renderer_draw.cpp NoteSkippedDraw) ----
+        // A draw the frame could not make: which surface and pipeline it wanted,
+        // and whether the pipeline was in the shader cache. `large` is the same
+        // test the draw uses to decide between compiling now and skipping: a
+        // surface at least 640 wide is a frame's worth, anything smaller is
+        // composed and may never be drawn again. Written on the render thread
+        // only; the ring is dumped on demand (files/skip_dump) and the first of
+        // each pair every five minutes, so a copy stays near the log's tail.
+        static constexpr uint32_t kSkipRing = 128, kSkipLogged = 256;
+        struct SkipEvent
+        {
+            uint64_t frame = 0, lastFrame = 0, count = 1;
+            uint64_t vertexShader = 0, pixelShader = 0;
+            uint64_t draws = 0;    // the target's draws when it was skipped
+            uint32_t width = 0, height = 0, tile = 0, pitch = 0;
+            uint32_t guestFormat = 0, samples = 0;
+            uint32_t queue = 0;    // pipelines waiting for the warmup worker
+            bool recorded = false, large = false;
+        };
+        struct SkipPair
+        {
+            uint64_t vertexShader = 0, pixelShader = 0;
+            uint32_t guestFormat = 0, samples = 0;
+            bool large = false;
+            auto operator<=>(const SkipPair&) const = default;
+        };
+        struct SkipFirst
+        {
+            uint64_t count = 0, firstFrame = 0, lastFrame = 0, draws = 0;
+            uint32_t width = 0, height = 0, tile = 0, pitch = 0, queue = 0;
+            bool recorded = false;
+        };
+        struct SkipClass
+        {
+            bool large = false;
+            uint32_t guestFormat = 0, samples = 0;
+            auto operator<=>(const SkipClass&) const = default;
+        };
+        SkipEvent skipRing[kSkipRing];
+        uint32_t skipRingCount = 0, skipRingNewest = 0;
+        std::map<SkipPair, SkipFirst> skipPairs;       // the first of each, session
+        uint32_t skipLogged = 0;                        // of those, how many logged
+        std::map<SkipClass, uint64_t> skipClasses;      // this window's counts
+        std::chrono::steady_clock::time_point skipDumpedAt{};
+        // The pipeline keys the shader cache holds -- the prewarm gap: a key in
+        // here was meant to be built before the title asked. Filled once when
+        // the cache loads, added to as this run records more, never scanned.
+        std::unordered_set<PipelineKey, WordsHash> recordedKeys;
     };
     extern State g;
 
@@ -607,6 +661,19 @@ namespace vk::renderer::detail
         if (g_dumpDraws) LOGW("DUMP   skipped: %s", why);
         if (g.drawRecord && !g.drawRecord->skipped) g.drawRecord->skipped = why;
     }
+
+    // A draw the frame did not make, for the skip report: logged the first time
+    // its (pipeline key x surface class) comes up, kept in the ring, and counted
+    // for the 600-swap line. Called where a draw returns for want of a pipeline.
+    void NoteSkippedDraw(const PipelineKey& key, const Target& target);
+    // The skip report's ring, pairs and window counts, forgotten: Shutdown.
+    void ResetSkipDiagnostics();
+    // The ring and the first of each pair (newest first) to the log.
+    void DumpSkipDiagnostics(const char* why, bool ring);
+    // DumpSkipDiagnostics(ring: false) when five minutes have passed since the last.
+    void MaybeDumpSkipDiagnostics();
+    // This window's skips per (class x format x samples), for the 600-swap line.
+    std::string SkipClassSummary();
 
     // Where draws read and write an attachment: colour at the output stage,
     // depth and stencil at both tests -- the late one for a shader that can
@@ -827,8 +894,11 @@ namespace vk::renderer::detail
     // one still compiling. False if it was never handed over.
     bool TakePrepared(uint64_t hash, Shader& out);
     // A pipeline linked from the two shaders' libraries and the state-only
-    // ones, with an optimised link asked for in the background.
-    VkPipeline LinkPipeline(const PipelineKey& key, const Shader& vertex, const Shader& pixel);
+    // ones, with an optimised link asked for in the background. `result`, where
+    // asked, is how the driver's link call ended: VK_SUCCESS for a link refused
+    // before it (a library that would not be made).
+    VkPipeline LinkPipeline(const PipelineKey& key, const Shader& vertex, const Shader& pixel,
+                            VkResult* result = nullptr);
     // Puts the optimised links that have finished in place of the fast ones.
     void TakeOptimisedPipelines();
     // Every finished frame, so the compiling waits while the world is drawn.
@@ -853,6 +923,11 @@ namespace vk::renderer::detail
     VkPipeline FindPipeline(const PipelineKey& key);
     void EnqueuePipelineWarmup(const Recorded& rec, bool highPriority = false);
     std::vector<Recorded> TakeBuiltForDraws();
+    // The pipeline key a recorded recipe builds into, made as the draw path makes
+    // its own: the skip report's "was this key in the cache" uses the same key.
+    PipelineKey KeyOfRecorded(const Recorded& rec);
+    // How many pipelines the background worker has waiting.
+    uint32_t WarmupQueueLength();
     const char* ShaderCachePath();
     void WriteShaderCache(bool force = false);
     void CollectPassTimings(uint32_t slot);
@@ -865,6 +940,11 @@ namespace vk::renderer::detail
     // namespace.
     namespace warmup
     {
+        // Why a sync build made no pipeline, so the pacing treats a lost race
+        // (another thread is compiling it), a driver out of memory (one retry
+        // later) and a rejection (never again) differently.
+        enum class SyncFail { None, RaceLost, VkTransient, VkDeterministic };
+
         // One thread compiles a key; a thread that finds that key being built
         // waits for it rather than compiling a second copy (EnsurePipeline).
         // BeginBuild is the claim; EndBuild every way out of a build.
@@ -872,14 +952,29 @@ namespace vk::renderer::detail
         void EndBuild(const PipelineKey& key);
         bool IsBuilding(const PipelineKey& key);
         // Whether an expensive frame may build the pipeline it is missing instead
-        // of skipping the draw -- one in 500 ms, 2000 ms (or 50 attempts) a
-        // session, and never a key that already failed -- and what that attempt
-        // took. A build over 150 ms latches State::syncBroken for the rest of the
-        // session, once.
+        // of skipping the draw: the cooldown after the last successful build has
+        // passed (8 x that build's time, 20 ms at least), this frame has not spent
+        // over 40 ms on sync builds, the session has 5000 ms and 100 attempts
+        // left, and the key is not denied -- a driver memory failure may retry
+        // once, 30 frames later; a rejection is permanent. A read of the pacing
+        // (only a refusal is written, once a session): the attempt is charged by
+        // NoteSyncCompile. A build over 150 ms latches State::syncBroken for the
+        // rest of the session, once.
         bool SyncCompileAllowed(const PipelineKey& key);
+        // True once this frame has spent over 40 ms on sync builds. Also asked by
+        // SyncCompileAllowed; the draw asks first, before the build lock.
+        bool SyncFrameCapped();
         void NoteSyncCompile(const PipelineKey& key, uint32_t targetWidth, bool built,
-                             uint32_t elapsedMs);
+                             uint32_t elapsedMs, SyncFail reason);
+        // The session's sync spend, for the 600-swap perf line.
+        void SyncCompileSpend(uint32_t& totalMs, uint32_t& attempts);
+        // Forgets the last run: Shutdown calls it, since State is static.
+        void ResetSyncCompile();
     }
+
+    // EnsurePipeline with the sync attempt's outcome, for the experiment only.
+    VkPipeline EnsurePipelineSync(const PipelineKey& key, const Shader& vertex, const Shader& pixel,
+                                  bool* made, warmup::SyncFail* reason);
 
     struct WarmupStats
     {

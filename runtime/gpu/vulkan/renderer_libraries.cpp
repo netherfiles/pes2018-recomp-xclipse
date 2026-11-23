@@ -148,7 +148,7 @@ namespace
                                nullptr, info, &state.rendering);
     }
 
-    VkPipeline Link(const VkPipeline (&libraries)[4], bool optimise)
+    VkPipeline Link(const VkPipeline (&libraries)[4], bool optimise, VkResult* result = nullptr)
     {
         VkPipelineLibraryCreateInfoKHR linked{ VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR };
         linked.libraryCount = 4;
@@ -158,21 +158,22 @@ namespace
         info.flags = optimise ? VK_PIPELINE_CREATE_LINK_TIME_OPTIMIZATION_BIT_EXT : 0;
         info.layout = Layout();
         VkPipeline made = VK_NULL_HANDLE;
+        VkResult res = VK_SUCCESS;
         {
             std::lock_guard createLock(vk::pipeline::CreationMutex());
             void* pCache = Cache();
             if (pCache)
             {
                 std::lock_guard cacheLock(vk::pipeline::CacheMutex());
-                if (vkCreateGraphicsPipelines(g.device, static_cast<VkPipelineCache>(pCache), 1, &info, nullptr, &made) != VK_SUCCESS)
-                    return VK_NULL_HANDLE;
+                res = vkCreateGraphicsPipelines(g.device, static_cast<VkPipelineCache>(pCache), 1, &info, nullptr, &made);
             }
             else
             {
-                if (vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &made) != VK_SUCCESS)
-                    return VK_NULL_HANDLE;
+                res = vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &made);
             }
         }
+        if (result) *result = res;
+        if (res != VK_SUCCESS) return VK_NULL_HANDLE;
         return made;
     }
 
@@ -357,13 +358,17 @@ namespace vk::renderer::detail
         return true;
     }
 
-    VkPipeline LinkPipeline(const PipelineKey& key, const Shader& vertex, const Shader& pixel)
+    VkPipeline LinkPipeline(const PipelineKey& key, const Shader& vertex, const Shader& pixel,
+                            VkResult* result)
     {
+        if (result) *result = VK_SUCCESS;
         const VkPipeline input = InputLibrary(key.topology);
         const VkPipeline output = OutputLibrary(key);
         if (!input || !output) return VK_NULL_HANDLE;
         const VkPipeline libraries[4] = { input, vertex.library, pixel.library, output };
-        const VkPipeline linked = Link(libraries, false);
+        VkResult res = VK_SUCCESS;
+        const VkPipeline linked = Link(libraries, false, &res);
+        if (result) *result = res;
         if (!linked) return VK_NULL_HANDLE;
         g.pipelinesLinked++;
         std::lock_guard lock(o.lock);

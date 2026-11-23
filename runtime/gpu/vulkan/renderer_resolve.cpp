@@ -914,6 +914,14 @@ void vk::renderer::Swap(uint32_t frontBuffer)
                     g_captureBurst = 8;
                     if (FILE* f = std::fopen((android::GetPaths().external + "/dump_frame").c_str(), "w")) std::fclose(f);
                 }
+                // The skip report's ring and first-per table, on the same button:
+                // `adb shell touch .../files/skip_dump` prints them and the file goes.
+                const std::string skipDump = android::GetPaths().external + "/skip_dump";
+                if (access(skipDump.c_str(), F_OK) == 0)
+                {
+                    unlink(skipDump.c_str());
+                    DumpSkipDiagnostics("skip_dump", /*ring=*/true);
+                }
             }
         }
 #endif
@@ -1040,18 +1048,26 @@ void vk::renderer::Swap(uint32_t frontBuffer)
             lastFence = fence;
             g.vertexBytesCopied = g.vertexBytesReused = 0;
             g.windowWriteBacks = 0;
+            uint32_t syncSessionMs = 0, syncSessionAttempts = 0;
+            warmup::SyncCompileSpend(syncSessionMs, syncSessionAttempts);
+            const std::string skipClasses = SkipClassSummary();
             LOGI("renderer: last 600 swaps: %llu draws (%llu recorded), %llu resolves;"
-                 " sync: %u built of %u in %u ms (%u ms the longest)%s; skipped:%s",
+                 " sync: %u built of %u in %u ms (%u ms the longest)%s;"
+                 " sync session: %u ms over %u attempts; skipped:%s; skip classes:%s",
                  (unsigned long long)(g.draws - lastDraws), (unsigned long long)(g.drawsRecorded - lastRecorded),
                  (unsigned long long)(g.resolves - lastResolves),
                  g.syncOk, g.syncAttempts, g.syncTotalMs, g.syncMaxMs,
                  g.syncBroken ? ", breaker tripped" : "",
-                 skipped.empty() ? " nothing" : skipped.c_str());
+                 syncSessionMs, syncSessionAttempts,
+                 skipped.empty() ? " nothing" : skipped.c_str(),
+                 skipClasses.empty() ? " none" : skipClasses.c_str());
             lastDraws = g.draws; lastRecorded = g.drawsRecorded; lastResolves = g.resolves;
             g.syncAttempts = 0;
             g.syncOk = 0;
             g.syncTotalMs = 0;
             g.syncMaxMs = 0;
+            MaybeDumpSkipDiagnostics();
+            g.skipClasses.clear();
         }
     }
     auto found = g.resolvedTo.find(frontBuffer & ~0xFFFu);

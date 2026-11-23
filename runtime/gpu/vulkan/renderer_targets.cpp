@@ -501,6 +501,8 @@ namespace vk::renderer::detail
         target.depth = key.depth;
         target.width = width;
         target.height = height;
+        target.tile = key.baseTile;
+        target.pitch = key.pitch;
         target.scale = SceneScaleFor(width);
         target.format = VkFormat(key.format);
         target.guestFormat = guestFormat;

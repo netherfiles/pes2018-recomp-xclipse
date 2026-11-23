@@ -93,6 +93,192 @@ namespace vk::renderer::detail
 #endif
     }
 
+    // ---- the skip report (State::skipRing) ----
+    // A draw a frame loses for want of a pipeline is one event. The two things a
+    // reporter's log has to answer are which surface it was, and whether the
+    // pipeline was one the shader cache was supposed to have built already. A
+    // surface under 640 wide is composed once and may never be drawn again: lost
+    // there, a player is black for the rest of the match. A frame-sized one is a
+    // hole the player sees. Neither leaves a trace past Skip()'s first and
+    // 5,000th line, so every one is counted here, the first of each pair logged.
+    void NoteSkippedDraw(const PipelineKey& key, const Target& target)
+    {
+        State::SkipEvent event;
+        event.frame = event.lastFrame = g.frames;
+        event.vertexShader = key.vertexShader;
+        event.pixelShader = key.pixelShader;
+        event.draws = target.draws;
+        event.width = target.width;
+        event.height = target.height;
+        event.tile = target.tile;
+        event.pitch = target.pitch;
+        event.guestFormat = target.guestFormat;
+        event.samples = uint32_t(target.samples);
+        event.queue = WarmupQueueLength();
+        event.large = target.width >= 640;
+        event.recorded = g.recordedKeys.find(key) != g.recordedKeys.end();
+
+        // The ring: the same draw repeated is one entry with a count, so a skip
+        // that floods every frame does not sweep the rest out of it. Full, the
+        // oldest event that is not a frame-sized surface nothing has drawn into
+        // yet goes first: that composition is the one a title does once.
+        const auto same = [](const State::SkipEvent& a, const State::SkipEvent& b) {
+            return a.vertexShader == b.vertexShader && a.pixelShader == b.pixelShader &&
+                   a.guestFormat == b.guestFormat && a.samples == b.samples && a.large == b.large &&
+                   a.tile == b.tile && a.pitch == b.pitch && a.width == b.width &&
+                   a.height == b.height && a.draws == b.draws;
+        };
+        if (g.skipRingCount && same(g.skipRing[g.skipRingNewest], event))
+        {
+            ++g.skipRing[g.skipRingNewest].count;
+            g.skipRing[g.skipRingNewest].lastFrame = event.frame;
+        }
+        else
+        {
+            uint32_t slot = g.skipRingCount;
+            if (slot >= State::kSkipRing)
+            {
+                slot = UINT32_MAX;
+                for (uint32_t i = 0; i < State::kSkipRing; i++)
+                {
+                    if (g.skipRing[i].large && g.skipRing[i].draws == 0) continue;
+                    if (slot == UINT32_MAX || g.skipRing[i].lastFrame < g.skipRing[slot].lastFrame)
+                        slot = i;
+                }
+                // Everything in it is one of those: the oldest goes.
+                if (slot == UINT32_MAX)
+                {
+                    slot = 0;
+                    for (uint32_t i = 1; i < State::kSkipRing; i++)
+                        if (g.skipRing[i].lastFrame < g.skipRing[slot].lastFrame) slot = i;
+                }
+            }
+            else ++g.skipRingCount;
+            g.skipRing[slot] = event;
+            g.skipRingNewest = slot;
+        }
+
+        // This window's counts: what the 600-swap line prints beside `skipped:`.
+        ++g.skipClasses[{ event.large, event.guestFormat, event.samples }];
+
+        // The first of each (pipeline key x class). A frame-sized surface with no
+        // draws is exempt from the cap: a rejection that never memoises comes
+        // back every frame, and it is the entry that says the port declines a
+        // pipeline the title needs.
+        const auto found = g.skipPairs.try_emplace(State::SkipPair{ event.vertexShader,
+            event.pixelShader, event.guestFormat, event.samples, event.large });
+        State::SkipFirst& first = found.first->second;
+        if (found.second)
+        {
+            first.firstFrame = event.frame;
+            first.width = event.width;
+            first.height = event.height;
+            first.tile = event.tile;
+            first.pitch = event.pitch;
+            first.draws = event.draws;
+            first.queue = event.queue;
+            first.recorded = event.recorded;
+        }
+        ++first.count;
+        first.lastFrame = event.frame;
+        const bool exempt = event.large && event.draws == 0;
+        if (found.second && (exempt || g.skipLogged < State::kSkipLogged))
+        {
+            if (!exempt) ++g.skipLogged;
+            LOGW("renderer: skip: %s %ux%u fmt %u samples %u key %016llX/%016llX draws %llu"
+                 " tile %u pitch %u q %u rec %u (x%llu)",
+                 event.large ? "large" : "small", event.width, event.height, event.guestFormat,
+                 event.samples, (unsigned long long)event.vertexShader,
+                 (unsigned long long)event.pixelShader, (unsigned long long)event.draws,
+                 event.tile, event.pitch, event.queue, event.recorded ? 1u : 0u,
+                 (unsigned long long)first.count);
+        }
+    }
+
+    std::string SkipClassSummary()
+    {
+        std::string out;
+        for (const auto& [cls, count] : g.skipClasses)
+        {
+            const char* name = gpu::ColorTargetFormatName(cls.guestFormat);
+            char item[72];
+            std::snprintf(item, sizeof item, "%s/%s/%u x%llu", cls.large ? "large" : "small",
+                          name ? name : "?", cls.samples, (unsigned long long)count);
+            if (!out.empty()) out += ' ';
+            out += item;
+        }
+        return out;
+    }
+
+    void DumpSkipDiagnostics(const char* why, bool ring)
+    {
+        const std::string classes = SkipClassSummary();
+        LOGW("skip: dump (%s): %u in the ring, %zu pairs, %u logged; window classes:%s", why,
+             g.skipRingCount, g.skipPairs.size(), g.skipLogged,
+             classes.empty() ? " none" : classes.c_str());
+        if (ring)
+        {
+            // Oldest first: every event the ring still holds, the one surface and
+            // pipeline it was, and the frame it first and last came in.
+            std::vector<const State::SkipEvent*> events;
+            events.reserve(g.skipRingCount);
+            for (uint32_t i = 0; i < g.skipRingCount; i++) events.push_back(&g.skipRing[i]);
+            std::sort(events.begin(), events.end(), [](const State::SkipEvent* a, const State::SkipEvent* b) {
+                return a->frame != b->frame ? a->frame < b->frame : a->lastFrame < b->lastFrame;
+            });
+            for (const State::SkipEvent* e : events)
+                LOGW("skip:   frame %llu..%llu x%llu %s %ux%u fmt %u samples %u"
+                     " key %016llX/%016llX draws %llu tile %u pitch %u q %u rec %u",
+                     (unsigned long long)e->frame, (unsigned long long)e->lastFrame,
+                     (unsigned long long)e->count, e->large ? "large" : "small", e->width,
+                     e->height, e->guestFormat, e->samples, (unsigned long long)e->vertexShader,
+                     (unsigned long long)e->pixelShader, (unsigned long long)e->draws, e->tile,
+                     e->pitch, e->queue, e->recorded ? 1u : 0u);
+        }
+        // The first of each pair, newest first, capped so the periodic copy stays
+        // short: the frame it came in first is what says whether it still does.
+        struct Row { State::SkipPair pair; State::SkipFirst first; };
+        std::vector<Row> rows;
+        rows.reserve(g.skipPairs.size());
+        for (const auto& [pair, first] : g.skipPairs) rows.push_back({ pair, first });
+        std::sort(rows.begin(), rows.end(),
+                  [](const Row& a, const Row& b) { return a.first.firstFrame > b.first.firstFrame; });
+        constexpr size_t kTable = 32;
+        for (size_t i = 0; i < rows.size() && i < kTable; i++)
+        {
+            const Row& r = rows[i];
+            LOGW("skip:   first frame %llu x%llu %s %ux%u fmt %u samples %u"
+                 " key %016llX/%016llX draws %llu tile %u pitch %u q %u rec %u",
+                 (unsigned long long)r.first.firstFrame, (unsigned long long)r.first.count,
+                 r.pair.large ? "large" : "small", r.first.width, r.first.height,
+                 r.pair.guestFormat, r.pair.samples, (unsigned long long)r.pair.vertexShader,
+                 (unsigned long long)r.pair.pixelShader, (unsigned long long)r.first.draws,
+                 r.first.tile, r.first.pitch, r.first.queue, r.first.recorded ? 1u : 0u);
+        }
+    }
+
+    // The log is trimmed to its tail on export and rotated on the next run: a
+    // table printed once at the first draw is gone by the end of a match, so it
+    // is printed again every five minutes.
+    void MaybeDumpSkipDiagnostics()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - g.skipDumpedAt < std::chrono::minutes(5)) return;
+        g.skipDumpedAt = now;
+        if (g.skipPairs.empty()) return;
+        DumpSkipDiagnostics("periodic", /*ring=*/false);
+    }
+
+    void ResetSkipDiagnostics()
+    {
+        g.skipRingCount = g.skipRingNewest = 0;
+        g.skipPairs.clear();
+        g.skipClasses.clear();
+        g.skipLogged = 0;
+        g.skipDumpedAt = {};
+        g.recordedKeys.clear();
+    }
+
     // How far a clearing rectangle really reaches, in the surface's pixels: its own
     // corners, run through its vertex shader on the CPU as the depth-only clear does.
     // Its scissor is left at the reset value (8192 square) and says nothing; the
@@ -1214,15 +1400,18 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
     {
         Stopwatch watch(g.pipelineNanoseconds);
         built = EnsurePipeline(key, *vertex, *pixel, &newPipeline);
-        if (!built) { Skip("pipeline rejected"); return; }
+        if (!built) { NoteSkippedDraw(key, *colourTarget); Skip("pipeline rejected"); return; }
     }
     // The same for a draw into a surface the size of the frame -- the world
     // pass, its composite: skipped while the pipeline compiles, it leaves a hole
     // (the reporter's green block). PES17_SYNC_LARGE_PIPELINES builds it on the
-    // frame that needs it instead: one a frame, one build in 500 ms and a small
-    // budget a session (warmup::SyncCompileAllowed), and a build that takes too
-    // long gives the rest of the session back to the background worker
-    // (State::syncBroken). Off, the draw is skipped exactly as before.
+    // frame that needs it instead: under a cooldown of eight times the last
+    // build's time (20 ms at least) from its end, one success a frame, 5000 ms
+    // or 100 builds a session and 40 ms of builds a frame, with a key that fails
+    // denied -- a driver out of memory gets one retry 30 frames later, anything
+    // else none. A build that takes too long gives the rest of the session back
+    // to the background worker (State::syncBroken). Off, the draw is skipped
+    // exactly as before.
     if (!built && colourTarget->width >= 640)
     {
         static const bool syncLargePipelines = env::Flag("PES17_SYNC_LARGE_PIPELINES");
@@ -1231,18 +1420,21 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
         constexpr uint64_t kSlowFrameNanoseconds = 25000000;
         if (syncLargePipelines && !g.syncBroken && g.frames != g.lastSyncFrame &&
             g.lastFrameNanoseconds >= kSlowFrameNanoseconds &&
-            !warmup::IsBuilding(key) && warmup::SyncCompileAllowed(key))
+            !warmup::SyncFrameCapped() && !warmup::IsBuilding(key) &&
+            warmup::SyncCompileAllowed(key))
         {
             const auto began = std::chrono::steady_clock::now();
+            warmup::SyncFail reason = warmup::SyncFail::None;
             {
                 Stopwatch watch(g.pipelineNanoseconds);
-                built = EnsurePipeline(key, *vertex, *pixel, &newPipeline);
+                built = EnsurePipelineSync(key, *vertex, *pixel, &newPipeline, &reason);
             }
             const uint32_t tookMs = uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - began).count());
             // Built: drawn below, and not enqueued. Not built: the enqueue and
-            // skip below, and this key is not tried again this session.
-            warmup::NoteSyncCompile(key, colourTarget->width, built != nullptr, tookMs);
+            // skip below; NoteSyncCompile records why, and whether this key is
+            // tried again (not after losing the race to the background worker).
+            warmup::NoteSyncCompile(key, colourTarget->width, built != nullptr, tookMs, reason);
         }
     }
     if (!built)
@@ -1252,13 +1444,14 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
                       key.topology, depthControl, key.blendControl,
                       key.colourMask, modeCntl, key.samples };
         EnqueuePipelineWarmup(rec, /*highPriority=*/true);
+        NoteSkippedDraw(key, *colourTarget);
         Skip("pipeline compiling asynchronously in background");
         return;
     }
 #else
     VkPipeline built = [&] { Stopwatch watch(g.pipelineNanoseconds);
                              return EnsurePipeline(key, *vertex, *pixel, &newPipeline); }();
-    if (!built) { Skip("pipeline rejected"); return; }
+    if (!built) { NoteSkippedDraw(key, *colourTarget); Skip("pipeline rejected"); return; }
 #endif
     // What the background worker built for draws since the last look goes into
     // the shader cache too, so the next run prewarms it.
@@ -1269,6 +1462,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
             std::vector<Recorded> built = TakeBuiltForDraws();
             if (!built.empty())
             {
+                for (const Recorded& rec : built) g.recordedKeys.insert(KeyOfRecorded(rec));
                 g.recorded.insert(g.recorded.end(), built.begin(), built.end());
                 WriteShaderCache();
             }
@@ -1280,6 +1474,7 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
                                uint32_t(colourTarget->format), uint32_t(depthTarget->format),
                                key.topology, depthControl, key.blendControl,
                                key.colourMask, modeCntl, key.samples });
+        g.recordedKeys.insert(key);
         static uint32_t s_lastSaved = 0;
         if (g.recorded.size() - s_lastSaved >= 5)
         {

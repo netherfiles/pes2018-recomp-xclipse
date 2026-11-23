@@ -313,9 +313,14 @@ namespace vk::renderer::detail
     }
 
     // The whole pipeline in one call, both shaders compiled for it: what a
-    // device without pipeline libraries gets.
-    VkPipeline BuildPipeline(const PipelineKey& key, const Shader& vertex, const Shader& pixel)
+    // device without pipeline libraries gets. `result`, where asked, is how
+    // vkCreateGraphicsPipelines ended, so the sync experiment can tell a driver
+    // out of memory (worth one retry) from a rejection (never again); a build
+    // refused before the call leaves it VK_SUCCESS.
+    VkPipeline BuildPipeline(const PipelineKey& key, const Shader& vertex, const Shader& pixel,
+                             VkResult* result = nullptr)
     {
+        if (result) *result = VK_SUCCESS;
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -387,6 +392,7 @@ namespace vk::renderer::detail
         gpu::detail::SetCurrentDrawStage("idle");
         if (res != VK_SUCCESS)
         {
+            if (result) *result = res;
             LOGE("renderer: vkCreateGraphicsPipelines failed: %d (colour=%d, depth=%d, topo=%u, samples=%u) in %llu ms",
                  res, key.colourFormat, key.depthFormat, key.topology, key.samples, (unsigned long long)tookMs);
             return VK_NULL_HANDLE;
@@ -406,55 +412,88 @@ namespace vk::renderer::detail
         return VK_NULL_HANDLE;
     }
 
+    // One build of a key, with the two facts the sync experiment reads back: a
+    // lost claim (`claimed`) and how the driver's call ended (`failure`). The
+    // warmup and draw paths pass neither.
+    namespace
+    {
+        VkPipeline EnsurePipelineBuild(const PipelineKey& key, const Shader& vertex, const Shader& pixel,
+                                       bool* made, VkResult* failure, bool* claimed)
+        {
+            TakeOptimisedPipelines();
+            {
+                std::lock_guard lock(g_pipelinesMutex);
+                auto found = g.pipelines.find(key);
+                if (found != g.pipelines.end()) return found->second;
+            }
+
+            // One build of a key. If another thread already has it, this caller
+            // skips: the draw that needed it skips this frame, as it would have
+            // anyway, and the build in flight finishes it. The render thread never
+            // waits here.
+            if (!warmup::BeginBuild(key))
+            {
+                if (claimed) *claimed = false;
+                return nullptr;
+            }
+            // Every way out of here releases the claim.
+            struct Claim
+            {
+                const PipelineKey& key;
+                explicit Claim(const PipelineKey& k) : key(k) {}
+                ~Claim() { warmup::EndBuild(key); }
+            } claim(key);
+
+            if (made) *made = true;
+            LOGI("renderer: pipeline miss for %016llX/%016llX (c=%d, d=%d, topo=%u, blend=%08X, mask=%X, depth=%08X, mode=%08X)",
+                 (unsigned long long)key.vertexShader, (unsigned long long)key.pixelShader,
+                 key.colourFormat, key.depthFormat, key.topology,
+                 key.blendControl, key.colourMask, key.depthControl, key.modeCntl);
+
+            const auto compileStart = std::chrono::steady_clock::now();
+            stutters::Timed timed(stutters::kPipelines);
+            // Linked from the two shaders' libraries, compiled when the title
+            // loaded them, in well under a millisecond; or the whole pipeline
+            // compiled here, on a device that cannot.
+            VkResult res = VK_SUCCESS;
+            VkPipeline built = vertex.library && pixel.library ? LinkPipeline(key, vertex, pixel, &res)
+                                                               : BuildPipeline(key, vertex, pixel, &res);
+            if (failure) *failure = res;
+            const uint64_t took = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - compileStart).count());
+            g.compileMicroseconds += took;
+            report::Add(report::kPipeline, took);
+            if (!built)
+                LOGW("renderer: pipeline for %016llX/%016llX rejected",
+                     (unsigned long long)key.vertexShader, (unsigned long long)key.pixelShader);
+
+            {
+                std::lock_guard lock(g_pipelinesMutex);
+                if (built)
+                    g.pipelines[key] = built;
+            }
+            return built;
+        }
+    }
+
     VkPipeline EnsurePipeline(const PipelineKey& key, const Shader& vertex, const Shader& pixel,
                               bool* made)
     {
-        TakeOptimisedPipelines();
-        {
-            std::lock_guard lock(g_pipelinesMutex);
-            auto found = g.pipelines.find(key);
-            if (found != g.pipelines.end()) return found->second;
-        }
+        return EnsurePipelineBuild(key, vertex, pixel, made, nullptr, nullptr);
+    }
 
-        // One build of a key. If another thread already has it, this caller
-        // skips: the draw that needed it skips this frame, as it would have
-        // anyway, and the build in flight finishes it. The render thread never
-        // waits here.
-        if (!warmup::BeginBuild(key)) return nullptr;
-        // Every way out of here releases the claim.
-        struct Claim
-        {
-            const PipelineKey& key;
-            explicit Claim(const PipelineKey& k) : key(k) {}
-            ~Claim() { warmup::EndBuild(key); }
-        } claim(key);
-
-        if (made) *made = true;
-        LOGI("renderer: pipeline miss for %016llX/%016llX (c=%d, d=%d, topo=%u, blend=%08X, mask=%X, depth=%08X, mode=%08X)",
-             (unsigned long long)key.vertexShader, (unsigned long long)key.pixelShader,
-             key.colourFormat, key.depthFormat, key.topology,
-             key.blendControl, key.colourMask, key.depthControl, key.modeCntl);
-
-        const auto compileStart = std::chrono::steady_clock::now();
-        stutters::Timed timed(stutters::kPipelines);
-        // Linked from the two shaders' libraries, compiled when the title
-        // loaded them, in well under a millisecond; or the whole pipeline
-        // compiled here, on a device that cannot.
-        VkPipeline built = vertex.library && pixel.library ? LinkPipeline(key, vertex, pixel)
-                                                           : BuildPipeline(key, vertex, pixel);
-        const uint64_t took = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - compileStart).count());
-        g.compileMicroseconds += took;
-        report::Add(report::kPipeline, took);
-        if (!built)
-            LOGW("renderer: pipeline for %016llX/%016llX rejected",
-                 (unsigned long long)key.vertexShader, (unsigned long long)key.pixelShader);
-
-        {
-            std::lock_guard lock(g_pipelinesMutex);
-            if (built)
-                g.pipelines[key] = built;
-        }
+    VkPipeline EnsurePipelineSync(const PipelineKey& key, const Shader& vertex, const Shader& pixel,
+                                  bool* made, warmup::SyncFail* reason)
+    {
+        *reason = warmup::SyncFail::None;
+        bool claimed = true;
+        VkResult failure = VK_SUCCESS;
+        VkPipeline built = EnsurePipelineBuild(key, vertex, pixel, made, &failure, &claimed);
+        if (!built && !claimed) *reason = warmup::SyncFail::RaceLost;
+        else if (!built)
+            *reason = failure == VK_ERROR_OUT_OF_HOST_MEMORY || failure == VK_ERROR_OUT_OF_DEVICE_MEMORY
+                          ? warmup::SyncFail::VkTransient
+                          : warmup::SyncFail::VkDeterministic;
         return built;
     }
 
@@ -530,51 +569,149 @@ namespace vk::renderer::detail
         // ---- the sync-compile experiment (PES17_SYNC_LARGE_PIPELINES) ----
         // How much the experiment may cost: a build on the frame that needs it is
         // a frame the player sees, so it is paced, capped, and stops itself when
-        // one build is long enough to be a freeze in its own right.
-        constexpr std::chrono::milliseconds kSyncCooldown{ 500 };
-        constexpr uint32_t kSyncBudgetMs = 2000, kSyncBudgetAttempts = 50;
+        // one build is long enough to be a freeze in its own right. The cooldown
+        // grows with the build that set it; a frame may accumulate only so much;
+        // and the session spends 5000 ms or 100 builds before it gives up.
+        constexpr uint32_t kSyncBudgetMs = 5000, kSyncBudgetAttempts = 100;
         constexpr uint32_t kSyncBreakerMs = 150;
+        // After a build, the next may start kSyncCooldownFactor times that
+        // build's own time later, and never sooner than the floor. An empty
+        // history (no successful build yet) paces nothing.
+        constexpr uint32_t kSyncCooldownFactor = 8, kSyncCooldownFloorMs = 20;
+        // A key whose build the driver ran out of memory for is not retried
+        // until this many frames have passed.
+        constexpr uint32_t kSyncRetryFrames = 30;
+        // The most one frame may spend on sync builds before the rest of its
+        // draws skip as usual (the breaker's worst case adds one build to this).
+        constexpr uint32_t kSyncFrameCapMs = 40;
 
         namespace
         {
+            struct FailInfo
+            {
+                SyncFail reason = SyncFail::None;
+                uint64_t lastFailFrame = 0;
+                uint32_t retries = 0;
+            };
             // The session's spending, which the State counters cannot hold: those
             // are the 600-swap window's and are reset with lastDraws. Only the
             // render thread (renderer_draw.cpp's Draw) touches any of this.
             struct SyncBudget
             {
-                std::chrono::steady_clock::time_point last{};   // of the last attempt
+                std::chrono::steady_clock::time_point cooldownUntil{};   // the end of the last successful build
                 uint32_t totalMs = 0, attempts = 0;             // of the session
                 bool logged = false;                            // the first build
-                std::unordered_set<PipelineKey, WordsHash> failed;   // not retried
+                // The frame whose sync builds are accumulating, and how long
+                // they have taken so far.
+                uint64_t accumFrame = UINT64_MAX;
+                uint32_t accumMs = 0;
+                // Not tried again (or not until the retry wait has passed). A
+                // race lost is not here: the worker is building that key.
+                std::map<PipelineKey, FailInfo> failed;
+                // Each refusal is said once a session, not once a frame.
+                bool loggedBudget = false, loggedDeny = false, loggedRetryWait = false,
+                     loggedCooldown = false, loggedFrameCap = false;
             };
             SyncBudget g_sync;
         }
 
-        bool SyncCompileAllowed(const PipelineKey& key)
+        // True once this frame has spent over the cap on sync builds. Also
+        // checked by SyncCompileAllowed; the draw asks first, before taking the
+        // build lock.
+        bool SyncFrameCapped()
         {
-            if (g_sync.failed.find(key) != g_sync.failed.end()) return false;
-            if (g_sync.attempts >= kSyncBudgetAttempts || g_sync.totalMs >= kSyncBudgetMs)
-                return false;
-            const auto now = std::chrono::steady_clock::now();
-            if (now - g_sync.last < kSyncCooldown) return false;
-            // The attempt is paced from here, whether or not it makes a pipeline.
-            g_sync.last = now;
+            if (g_sync.accumFrame != g.frames || g_sync.accumMs <= kSyncFrameCapMs) return false;
+            if (!g_sync.loggedFrameCap)
+            {
+                g_sync.loggedFrameCap = true;
+                LOGI("renderer: sync build denied: this frame already spent %u ms on them (cap %u ms)",
+                     g_sync.accumMs, kSyncFrameCapMs);
+            }
             return true;
         }
 
-        void NoteSyncCompile(const PipelineKey& key, uint32_t targetWidth, bool built,
-                             uint32_t elapsedMs)
+        // A read of the pacing; the attempt is charged by NoteSyncCompile once
+        // it has been made, so asking twice costs nothing. A refusal is logged
+        // once a session, which is the only thing this writes.
+        bool SyncCompileAllowed(const PipelineKey& key)
         {
+            const auto failed = g_sync.failed.find(key);
+            if (failed != g_sync.failed.end())
+            {
+                const FailInfo& info = failed->second;
+                if (info.reason == SyncFail::VkDeterministic)
+                {
+                    if (!g_sync.loggedDeny)
+                    {
+                        g_sync.loggedDeny = true;
+                        LOGI("renderer: sync build denied for the rest of the session:"
+                             " %016llX/%016llX is not tried again",
+                             (unsigned long long)key.vertexShader,
+                             (unsigned long long)key.pixelShader);
+                    }
+                    return false;
+                }
+                // A driver out of memory may have it back: one retry, not
+                // before kSyncRetryFrames frames have passed.
+                if (g.frames - info.lastFailFrame < kSyncRetryFrames)
+                {
+                    if (!g_sync.loggedRetryWait)
+                    {
+                        g_sync.loggedRetryWait = true;
+                        LOGI("renderer: sync build waits %u frames after a driver out-of-memory failure",
+                             kSyncRetryFrames);
+                    }
+                    return false;
+                }
+            }
+            if (g_sync.attempts >= kSyncBudgetAttempts || g_sync.totalMs >= kSyncBudgetMs)
+            {
+                if (!g_sync.loggedBudget)
+                {
+                    g_sync.loggedBudget = true;
+                    LOGI("renderer: sync build denied for the rest of the session: budget exhausted"
+                         " (%u ms / %u attempts)", kSyncBudgetMs, kSyncBudgetAttempts);
+                }
+                return false;
+            }
+            if (std::chrono::steady_clock::now() < g_sync.cooldownUntil)
+            {
+                if (!g_sync.loggedCooldown)
+                {
+                    g_sync.loggedCooldown = true;
+                    LOGI("renderer: sync build paced: the cooldown after the last build has not passed");
+                }
+                return false;
+            }
+            return !SyncFrameCapped();
+        }
+
+        void NoteSyncCompile(const PipelineKey& key, uint32_t targetWidth, bool built,
+                             uint32_t elapsedMs, SyncFail reason)
+        {
+            // A lost race spent nothing: another thread is building this key,
+            // and the draw skips this frame as it would have.
+            if (reason == SyncFail::RaceLost) return;
+
             g.syncAttempts++;
             g.syncTotalMs += elapsedMs;
             if (elapsedMs > g.syncMaxMs) g.syncMaxMs = elapsedMs;
             g_sync.attempts++;
             g_sync.totalMs += elapsedMs;
+            if (g_sync.accumFrame != g.frames)
+            {
+                g_sync.accumFrame = g.frames;
+                g_sync.accumMs = 0;
+            }
+            g_sync.accumMs += elapsedMs;
             if (built)
             {
                 // One sync build a frame, and the draw goes on to use it.
                 g.syncOk++;
                 g.lastSyncFrame = g.frames;
+                g_sync.failed.erase(key);
+                g_sync.cooldownUntil = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(std::max(kSyncCooldownFactor * elapsedMs, kSyncCooldownFloorMs));
                 if (!g_sync.logged)
                 {
                     g_sync.logged = true;
@@ -584,11 +721,22 @@ namespace vk::renderer::detail
                          (unsigned long long)key.pixelShader, targetWidth, elapsedMs);
                 }
             }
+            else if (reason == SyncFail::VkTransient)
+            {
+                // One retry after the wait; failing that again is permanent.
+                FailInfo& info = g_sync.failed[key];
+                info.lastFailFrame = g.frames;
+                info.retries++;
+                info.reason = info.retries > 1 ? SyncFail::VkDeterministic : SyncFail::VkTransient;
+            }
             else
             {
                 // Not tried again this session: the draw below skips as it would
                 // have, and the warmup worker builds it in the background.
-                g_sync.failed.insert(key);
+                FailInfo& info = g_sync.failed[key];
+                info.reason = SyncFail::VkDeterministic;
+                info.lastFailFrame = g.frames;
+                info.retries++;
             }
             if (elapsedMs > kSyncBreakerMs && !g.syncBroken)
             {
@@ -598,6 +746,22 @@ namespace vk::renderer::detail
                 LOGI("renderer: a sync pipeline build took %u ms; the rest of this session"
                      " builds them in the background", elapsedMs);
             }
+        }
+
+        void SyncCompileSpend(uint32_t& totalMs, uint32_t& attempts)
+        {
+            totalMs = g_sync.totalMs;
+            attempts = g_sync.attempts;
+        }
+
+        // A new run starts with none of the last one's spending, denials, frame
+        // memory or latch. State is static and survives Shutdown, so this is
+        // called from there.
+        void ResetSyncCompile()
+        {
+            g_sync = SyncBudget{};
+            g.syncBroken = false;
+            g.lastSyncFrame = UINT64_MAX;
         }
 
         // True if the render thread has submitted a frame recently enough that the
@@ -775,6 +939,31 @@ namespace vk::renderer::detail
         std::vector<Recorded> out;
         out.swap(warmup::g_builtForDraws);
         return out;
+    }
+
+    PipelineKey KeyOfRecorded(const Recorded& rec)
+    {
+        PipelineKey key;
+        key.vertexShader = rec.vertexShader;
+        key.pixelShader = rec.pixelShader;
+        key.colourFormat = rec.colourFormat;
+        key.depthFormat = rec.depthFormat;
+        key.topology = rec.topology;
+        key.blendControl = rec.blendControl;
+        key.colourMask = rec.colourMask;
+        key.samples = rec.samples;
+        if (vk::pipeline::StaticStates())
+        {
+            key.depthControl = rec.depthControl;
+            key.modeCntl = rec.modeCntl;
+        }
+        return key;
+    }
+
+    uint32_t WarmupQueueLength()
+    {
+        std::lock_guard lock(warmup::g_warmupMutex);
+        return uint32_t(warmup::g_warmupQueue.size());
     }
 
     void EnqueuePipelineWarmup(const Recorded& rec, bool highPriority)
@@ -1016,6 +1205,10 @@ namespace vk::renderer::detail
         std::fclose(file);
 
         g.prewarmWanted = uint32_t(wanted.size());
+        // The cache's keys in one set, once: a skip asks whether its pipeline was
+        // recorded without walking the list. Added to as this run records more
+        // (renderer_draw.cpp).
+        for (const Recorded& want : wanted) g.recordedKeys.insert(KeyOfRecorded(want));
         const bool hasFastLibraries = vk::pipeline::PipelineLibraries();
         // The whole recorded set, synchronously, when the player asked for it
         // in Settings (PES17_SHADER_PREWARM_ALL): slow boot, no warmup debt
