@@ -38,9 +38,12 @@ namespace kernel
     // through any window, with the guest call chain that made each. For hunting memory
     // that two owners think is theirs.
     std::string OwnersOf(uint32_t guestAddress);
-    // Walks the XAPI process heap's large-block free list (PES's malloc); true if it is
-    // intact. Logs the first broken node and its owners. `quiet` skips the OK line.
-    bool     CheckProcessHeap(bool quiet);
+    // Reads (never writes) the XAPI process heap (PES's malloc): all 128 free-list
+    // bins and the segment table, every address bounds-checked first. True unless a
+    // break is still identical two samples at least 60 frames apart. `quiet` limits
+    // the coverage line to the first sample and one every 100. `frame` is the
+    // caller's frame counter for that spacing; 0 counts calls instead.
+    bool     CheckProcessHeap(bool quiet, uint64_t frame = 0);
     // One line: what the allocator did since the last call (allocations, free-list scan,
     // zeroing, lock waits, free-list length, write faults). Called every ~2 s while
     // files/alloc_watch exists.

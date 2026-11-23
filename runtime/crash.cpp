@@ -5,6 +5,7 @@
 #include "profiler.h"
 #include "kernel/kernel.h"
 #include "guest_memory.h"
+#include "heap_trace.h"
 #include "watchpoint.h"
 #include "gpu/memory_watch.h"
 #include "log.h"
@@ -31,6 +32,7 @@
 #endif
 #include <fcntl.h>
 #include <unistd.h>
+#include <cerrno>
 #include <pthread.h>
 #include <deque>
 #include <mutex>
@@ -63,6 +65,214 @@ namespace
         std::fprintf(stderr, "[E] --------------------------------\n");
         std::fflush(stderr);
 #endif
+    }
+
+    // ---- write-first crash dump ------------------------------------------
+    //
+    // Everything below runs before the fprintf/backtrace path, which takes
+    // stdio's lock, the repeat table's lock and the allocator: a fault raised
+    // while the faulting thread already held one of them would leave the
+    // handler waiting there instead of writing. This path shares none of it --
+    // a static buffer per line, a hex formatter of its own and one write() per
+    // line to a descriptor duplicated in Install -- so the numbers that describe
+    // the fault reach the log even when the rest of the handler cannot run.
+    //
+    // The guest's own registers are not reachable here: each recompiled call
+    // keeps its PPCContext as a local (main.cpp, kernel/threads.cpp), so nothing
+    // names r9/r10/r11 at the fault. The host registers in the signal context do
+    // hold what the guest held at the faulting instruction, and a guest address
+    // appears in them as its 32-bit offset; those are what gets read below.
+    int g_dumpFd = -1;
+    constexpr char kHexDigits[] = "0123456789ABCDEF";
+
+    struct DumpLine
+    {
+        char text[192];
+        size_t length = 0;
+
+        void Add(const char* text_)
+        {
+            while (*text_ && length + 1 < sizeof text) text[length++] = *text_++;
+        }
+
+        void Hex(uint64_t value, int digits)
+        {
+            for (int i = digits - 1; i >= 0; i--)
+            {
+                if (length + 1 >= sizeof text) return;
+                text[length++] = kHexDigits[(value >> (unsigned(i) * 4)) & 0xF];
+            }
+        }
+
+        void Dec(int64_t value)
+        {
+            if (value < 0) { Add("-"); value = -value; }
+            char back[24];
+            int used = 0;
+            do { back[used++] = char('0' + int(value % 10)); value /= 10; } while (value && used < 24);
+            while (used && length + 1 < sizeof text) text[length++] = back[--used];
+        }
+
+        void End()
+        {
+            if (length + 1 < sizeof text) text[length++] = '\n';
+            const int fd = g_dumpFd >= 0 ? g_dumpFd : STDERR_FILENO;
+            for (size_t done = 0; done < length; )
+            {
+                const ssize_t wrote = ::write(fd, text + done, length - done);
+                if (wrote < 0 && errno == EINTR) continue;
+                if (wrote <= 0) break;
+                done += size_t(wrote);
+            }
+            length = 0;
+        }
+    };
+
+    // 64 bytes of guest memory around `address` (a guest offset), kept inside
+    // the one 4 GiB mapping (guest_memory.cpp) by clamping the window: a fault a
+    // few bytes past the top -- the load through -1 this exists for -- is then
+    // still safe to read.
+    void DumpGuestBytes(const uint8_t* base, uint32_t address, const char* why)
+    {
+        if (!base) return;
+        constexpr uint64_t kSpace = 0x100000000ull;
+        uint64_t from = address >= 0x40 ? uint64_t(address) - 0x40 : 0;
+        if (from + 0x40 > kSpace) from = kSpace - 0x40;
+        from &= ~uint64_t(0xF);
+
+        DumpLine head;
+        head.Add("crashdump: "); head.Add(why); head.Add(" guest "); head.Hex(address, 8);
+        head.End();
+        for (int row = 0; row < 4; row++)
+        {
+            DumpLine line;
+            line.Add("crashdump:   "); line.Hex(from + uint64_t(row) * 16, 8); line.Add(":");
+            for (int i = 0; i < 4; i++)
+            {
+                uint32_t word = 0;
+                std::memcpy(&word, base + from + uint64_t(row) * 16 + uint64_t(i) * 4, 4);
+                line.Add(" "); line.Hex(__builtin_bswap32(word), 8);
+            }
+            line.End();
+        }
+    }
+
+    void DumpFaultNumbers(int sig, const siginfo_t* info, void* uctx)
+    {
+        const uint8_t* base = guest::Base();
+        const uint64_t host = uint64_t(base);
+        const uint64_t fault = uint64_t(info->si_addr);
+
+        DumpLine head;
+        head.Add("crashdump: sig="); head.Dec(sig);
+        head.Add(" code="); head.Dec(info->si_code);
+        head.Add(" at="); head.Hex(fault, 16);
+        if (base)
+        {
+            head.Add(" base="); head.Hex(host, 16);
+            head.Add(" guest=");
+            if (fault < host) head.Add("-");
+            else
+            {
+                const uint64_t offset = fault - host;
+                if (offset <= 0xFFFFFFFFull) head.Hex(offset, 8);
+                else { head.Add("+"); head.Hex(offset, 16); }
+            }
+        }
+        head.Add(" thread="); head.Add(t_name ? t_name : "?");
+        head.End();
+
+        // Around the address the fault names, when that is a guest one: the node
+        // being walked, not the faulting address of a host-side crash.
+        if (base && fault >= host + 0x40 && fault < host + 0x100000000ull)
+            DumpGuestBytes(base, uint32_t(fault - host), "around fault");
+#if defined(__aarch64__)
+        if (!uctx) return;
+        const ucontext_t* uc = static_cast<const ucontext_t*>(uctx);
+        for (int r = 0; r < 31; r += 4)
+        {
+            DumpLine line;
+            line.Add("crashdump: ");
+            for (int i = r; i < r + 4 && i < 31; i++)
+            {
+                if (i > r) line.Add(" ");
+                line.Add("x"); line.Dec(i); line.Add("="); line.Hex(uc->uc_mcontext.regs[i], 16);
+            }
+            line.End();
+        }
+        {
+            DumpLine line;
+            line.Add("crashdump: sp="); line.Hex(uc->uc_mcontext.sp, 16);
+            line.Add(" pc="); line.Hex(uc->uc_mcontext.pc, 16);
+            line.End();
+        }
+
+        // Behind up to two registers that hold a guest address: the allocator's
+        // node and its links are what the crash is about. The title's own heap
+        // is searched first (guest_memory.h), so a node there is not crowded out
+        // by a size or a texture address held somewhere else; the rest of the
+        // bank is the fallback. An offset inside a window is always safe to read.
+        unsigned shown = 0;
+        for (int pass = 0; pass < 2 && shown < 2; pass++)
+        {
+            for (int r = 0; r < 31 && shown < 2; r++)
+            {
+                const uint64_t value = uc->uc_mcontext.regs[r];
+                if (value < 0x80000000ull || value >= 0xC0000000ull || (value & 3)) continue;
+                const bool heap = value >= guest::kHeapBase && value < guest::kHeapEnd;
+                if (heap != (pass == 0)) continue;
+                DumpLine line;
+                line.Add("crashdump: x"); line.Dec(r); line.Add(heap ? " holds a heap address" : " holds a guest address");
+                line.End();
+                DumpGuestBytes(base, uint32_t(value), "around register");
+                shown++;
+            }
+        }
+#endif
+    }
+
+    // What the allocator hooks recorded (pes_hooks.cpp), newest first: the sizes
+    // asked for, the block the aligned allocator answered with, and the message
+    // id that was being dispatched. Empty when PES17_HEAP_TRACE is off.
+    void DumpHeapRing()
+    {
+        heaptrace::Entry entries[8];
+        const unsigned count = heaptrace::Snapshot(entries, 8);
+        if (!count) return;
+        DumpLine head;
+        head.Add("crashdump: heaptrace "); head.Dec(count); head.Add(" events, newest first");
+        head.End();
+        for (unsigned i = 0; i < count; i++)
+        {
+            const heaptrace::Entry& entry = entries[i];
+            DumpLine line;
+            line.Add("crashdump:  ");
+            if (entry.kind == heaptrace::kNew)
+            {
+                line.Add("new size="); line.Hex(entry.a, 8);
+                line.Add(" align="); line.Hex(entry.b, 8);
+                line.Add(" tag="); line.Hex(entry.c, 8);
+                line.Add(" -> "); line.Hex(entry.d, 8);
+                line.Add(" from "); line.Hex(entry.e, 8);
+            }
+            else if (entry.kind == heaptrace::kAligned)
+            {
+                line.Add("aligned size="); line.Hex(entry.a, 8);
+                line.Add(" align="); line.Hex(entry.b, 8);
+                line.Add(" -> "); line.Hex(entry.c, 8);
+                line.Add(" from "); line.Hex(entry.d, 8);
+                line.Add(" tag="); line.Hex(entry.e, 8);
+            }
+            else
+            {
+                line.Add("msg id="); line.Hex(entry.a, 8);
+                line.Add(" "); line.Hex(entry.b, 8);
+                line.Add(" "); line.Hex(entry.c, 8);
+                line.Add(" "); line.Hex(entry.d, 8);
+                line.Add(" "); line.Hex(entry.e, 8);
+            }
+            line.End();
+        }
     }
 
     // The line of /proc/self/maps that covers an address, straight from the
@@ -145,6 +355,11 @@ namespace
                          : (sig == SIGBUS)  ? "SIGBUS"
                          : (sig == SIGFPE)  ? "SIGFPE"
                          : (sig == SIGTRAP) ? "SIGTRAP" : "SIGILL";
+
+        // First, and only through write(): the lines below can hang if the fault
+        // was raised under a lock this handler would need again.
+        DumpFaultNumbers(sig, info, uctx);
+        DumpHeapRing();
 
         std::fprintf(stderr, "\n[E] ---- guest fault: %s at host %p ----\n", name, addr);
         // Which kind, in the kernel's own words. This is the difference
@@ -470,6 +685,11 @@ void crash::UnregisterThread()
 
 void crash::Install()
 {
+    // Wherever stderr goes now (a pipe into the log on Android), this is the
+    // handle the write-first dump keeps: stdio's own lock is what the handler
+    // may not take, and dup() gives nothing else to take.
+    if (g_dumpFd < 0) g_dumpFd = ::dup(STDERR_FILENO);
+
     struct sigaction sa{};
     sa.sa_sigaction = FaultHandler;
     sa.sa_flags = SA_SIGINFO;

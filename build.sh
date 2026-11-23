@@ -86,6 +86,14 @@ open(sys.argv[1], "w").write(s)
 PY
 done
 [ $changed = 0 ] || { echo "bounds did not converge; see logs-recomp.txt"; exit 1; }
+
+# The allocator reads a block's next/prev links out of guest memory and then
+# dereferences them; a word that is not a block address becomes a load outside
+# the guest space (the replay-goal crash, base+0xFFFFFFFF). Patched here and not
+# in the loop above, because every pass regenerates ppc/: this is the last look
+# at the copy that gets built, and a shape it cannot find fails the build instead
+# of shipping the crash again.
+python3 tools/fix_heaplinks.py ppc
 echo "$PROFILE" > ppc/PROFILE
 
 echo "==> 7. declarations + kernel import stubs"

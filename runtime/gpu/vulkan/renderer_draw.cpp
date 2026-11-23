@@ -1424,8 +1424,16 @@ void vk::renderer::Draw(const gpu::RegisterFile& r, const DrawCall& call)
     // and the draw is lost the same way; the <640 rule does not wait for a
     // build in progress either. That is rare, since a key with rec 0 is never
     // prewarmed and the worker only starts one after an earlier skip.
+    // On by default, so env::Flag cannot be used: it reads unset as off. "0" is
+    // the kill switch, and the draw then takes the skip path as before with the
+    // diagnostics still recording it.
+    static const bool firstDrawSync = [] {
+        const char* value = env::Text("PES17_FIRSTDRAW_SYNC");
+        return !value || !(value[0] == '0' && value[1] == 0);
+    }();
     if (!built && colourTarget->width >= 640 && colourTarget->draws == 0 &&
-        !warmup::IsBuilding(key) && warmup::SyncCompileAllowed(key, /*firstDraw=*/true))
+        firstDrawSync && !warmup::IsBuilding(key) &&
+        warmup::SyncCompileAllowed(key, /*firstDraw=*/true))
     {
         const auto began = std::chrono::steady_clock::now();
         warmup::SyncFail reason = warmup::SyncFail::None;
