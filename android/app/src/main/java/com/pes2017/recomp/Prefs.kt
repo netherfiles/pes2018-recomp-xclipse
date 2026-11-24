@@ -345,6 +345,21 @@ class Prefs(context: Context) {
         get() = store.getString(KEY_UPDATE_TAG, "") ?: ""
         set(value) = store.edit().putString(KEY_UPDATE_TAG, value).apply()
 
+    /** When the release feed was last read, in epoch milliseconds (0 = never). */
+    var lastUpdateCheckAt: Long
+        get() = store.getLong(KEY_LAST_UPDATE_AT, 0L)
+        set(value) = store.edit().putLong(KEY_LAST_UPDATE_AT, value).apply()
+
+    /** The release the last check pointed at, by tag; "" when it found none. */
+    var lastUpdateTag: String
+        get() = store.getString(KEY_LAST_UPDATE_TAG, "") ?: ""
+        set(value) = store.edit().putString(KEY_LAST_UPDATE_TAG, value).apply()
+
+    /** That release's build number, 0 when its notes carried none. */
+    var lastUpdateCode: Int
+        get() = store.getInt(KEY_LAST_UPDATE_CODE, 0)
+        set(value) = store.edit().putInt(KEY_LAST_UPDATE_CODE, value).apply()
+
     /** Shown once, the first time the player opens the app. */
     var seenWelcome: Boolean
         get() = store.getBoolean(KEY_WELCOME, false)
@@ -421,6 +436,9 @@ class Prefs(context: Context) {
         private const val KEY_AUTO_LAUNCH = "autoLaunch"
         private const val KEY_DRIVER_AUTO = "driverAutoTried"
         private const val KEY_UPDATE_TAG = "seenUpdateTag"
+        private const val KEY_LAST_UPDATE_AT = "lastUpdateCheckAt"
+        private const val KEY_LAST_UPDATE_TAG = "lastUpdateTag"
+        private const val KEY_LAST_UPDATE_CODE = "lastUpdateCode"
         private const val KEY_PREWARM_ALL = "prewarmAllShaders"
         private const val KEY_PRESET = "performancePreset"
         private const val KEY_GPU_BUILD = "gpuNameBuild"

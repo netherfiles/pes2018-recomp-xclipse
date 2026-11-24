@@ -167,6 +167,20 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
+    <!-- The same entries in portrait, where the column scrolls: a row that
+         grows with the system font instead of a fixed 48dp box, so at
+         fontScale 2.0 the label is not cut off. The weight is cancelled, not
+         inherited. -->
+    <style name="MenuEntryRow" parent="MenuEntry">
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">0</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">10dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
     <!-- A card holding one group of settings (Display, Frame rate, ...). -->
     <style name="SettingGroup">
         <item name="android:layout_width">match_parent</item>

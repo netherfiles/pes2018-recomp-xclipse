@@ -73,6 +73,12 @@
             android:paddingStart="10dp"
             android:paddingEnd="16dp">
 
+            <!-- Landscape is one screen: seven entries share the height left
+                 under the header and above the 26dp strip. On a 360dp-tall
+                 screen that is under 48dp per row, and tighter when the system
+                 font grows. Accepted as it is: the column stays on one screen,
+                 and layout-port is the variant with full-height rows and a
+                 scrolling column. Do not give this column a scroll bar. -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
@@ -106,6 +112,11 @@
                     android:id="@+id/log"
                     style="@style/MenuEntry"
                     android:text="@string/view_log" />
+
+                <Button
+                    android:id="@+id/check_update"
+                    style="@style/MenuEntry"
+                    android:text="@string/check_for_updates" />
 
                 <Button
                     android:id="@+id/entry_quit"

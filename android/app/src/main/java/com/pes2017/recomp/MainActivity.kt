@@ -22,9 +22,10 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * The launcher: is the game installed, which driver will be used, and the
@@ -48,7 +49,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var detailTitle: TextView
     private lateinit var detailText: TextView
     private lateinit var versionTag: TextView
+    private lateinit var checkUpdate: Button
     private lateinit var directLaunchSwitch: androidx.appcompat.widget.SwitchCompat
+    private var menuScroll: ScrollView? = null
     private var detectedSource: GameSource? = null
     private var detectedSources: List<GameSource> = emptyList()
     private var nativeReady = false
@@ -58,6 +61,19 @@ class MainActivity : AppCompatActivity() {
     private var relaunchRequested = false
     private var pendingInstallId: Long = -1
     private var pendingUpdateUrl: String? = null
+    private var pendingUpdateTag: String = ""
+    private var pendingUpdateSha: String = ""
+    private var pendingDownloadName: String = ""
+
+    /** One release check at a time; a second tap waits for the first answer. */
+    private val updateCheckRunning = AtomicBoolean(false)
+
+    /** A manual tap arrived while a check was in flight: answer with its result. */
+    @Volatile
+    private var manualCheckQueued = false
+
+    /** The tag the entry's badge currently stands for, restored on a failed check. */
+    private var shownUpdateTag: String = ""
 
     /**
      * A diagnostics report is being written. The export walks every log file, so
@@ -96,6 +112,16 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         applySystemBars()
         prefs = Prefs(this)
+        // A rotation while an update download or the launch of the game is in
+        // flight: the new instance must carry on rather than start over.
+        if (savedInstanceState != null) {
+            pendingInstallId = savedInstanceState.getLong(STATE_INSTALL_ID, -1)
+            pendingUpdateUrl = savedInstanceState.getString(STATE_UPDATE_URL)
+            pendingUpdateTag = savedInstanceState.getString(STATE_UPDATE_TAG) ?: ""
+            pendingUpdateSha = savedInstanceState.getString(STATE_UPDATE_SHA) ?: ""
+            pendingDownloadName = savedInstanceState.getString(STATE_DOWNLOAD_NAME) ?: ""
+            hasAutoLaunched = savedInstanceState.getBoolean(STATE_AUTO_LAUNCHED, false)
+        }
         relaunchRequested = QuickGraphics.takeRelaunch(intent, prefs)
         // The performance preset this phone starts from, once (DeviceProfile).
         try { DeviceProfile.ensurePreset(this, prefs) } catch (_: Throwable) {}
@@ -109,6 +135,8 @@ class MainActivity : AppCompatActivity() {
         detailText = findViewById(R.id.detail_text)
         versionTag = findViewById(R.id.version_tag)
         directLaunchSwitch = findViewById(R.id.direct_launch_switch)
+        // Present only in the portrait layout, where the column scrolls.
+        menuScroll = findViewById(R.id.menu_scroll)
         try {
             val info = packageManager.getPackageInfo(packageName, 0)
             val name = info.versionName ?: ""
@@ -171,10 +199,23 @@ class MainActivity : AppCompatActivity() {
             select(quitButton)
             finishAndRemoveTask()
         }
+        checkUpdate = findViewById(R.id.check_update)
+        checkUpdate.setOnClickListener {
+            select(checkUpdate)
+            showDetail(getString(R.string.check_for_updates), getString(R.string.update_checking))
+            checkForUpdates(manual = true)
+        }
+        // The credit row sits above the strip only in the portrait layout.
+        findViewById<android.view.View>(R.id.credit_row)?.setOnClickListener {
+            openPage(RELEASES_PAGE)
+        }
         // The cursor starts on KICK OFF, and the strip at the foot scrolls
-        // (a marquee runs only on a selected view).
-        select(play)
+        // (a marquee runs only on a selected view). A restored selection is
+        // the same programmatic move: no detail auto-scroll for either.
+        select(play, reveal = false)
         footer.isSelected = true
+        val restored = savedInstanceState?.getInt(STATE_SELECTED, 0) ?: 0
+        if (restored != 0 && restored != play.id) findViewById<Button>(restored)?.let { select(it, reveal = false) }
 
         // Whatever killed the app last time, shown before anything else is
         // attempted -- it may well be about to happen again.
@@ -207,7 +248,7 @@ class MainActivity : AppCompatActivity() {
             android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
-        checkForUpdates()
+        autoUpdateCheck()
         predownloadDriver()
     }
 
@@ -254,10 +295,27 @@ class MainActivity : AppCompatActivity() {
         recoverPatchesIfIdle()
         refresh()
         refreshDetail()
-        pendingUpdateUrl?.let { url ->
+        // The download can finish while this activity is not listening (a
+        // killed process loses the broadcast): ask the manager directly.
+        reconcilePendingDownload()
+        // Back from the "install unknown apps" screen: the download the player
+        // already asked for starts now, with the hash to verify it against.
+        val waiting = pendingUpdateUrl
+        if (waiting != null && packageManager.canRequestPackageInstalls()) {
             pendingUpdateUrl = null
-            if (packageManager.canRequestPackageInstalls()) startUpdateDownload(url)
+            startUpdateDownload(waiting, pendingUpdateTag, pendingUpdateSha)
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putLong(STATE_INSTALL_ID, pendingInstallId)
+        outState.putString(STATE_UPDATE_URL, pendingUpdateUrl)
+        outState.putString(STATE_UPDATE_TAG, pendingUpdateTag)
+        outState.putString(STATE_UPDATE_SHA, pendingUpdateSha)
+        outState.putString(STATE_DOWNLOAD_NAME, pendingDownloadName)
+        outState.putBoolean(STATE_AUTO_LAUNCHED, hasAutoLaunched)
+        outState.putInt(STATE_SELECTED, selectedEntry?.id ?: 0)
     }
 
     /**
@@ -526,9 +584,10 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * PES 6's cursor on the chosen entry: the ring beside it, the band under it,
-     * its text in gold. The one before gets its own colour back.
+     * its text in gold. The one before gets its own colour back. In portrait a
+     * tap on an entry below the fold brings the detail panel into view.
      */
-    private fun select(entry: Button) {
+    private fun select(entry: Button, reveal: Boolean = true) {
         selectedEntry?.let { previous ->
             previous.setBackgroundColor(android.graphics.Color.TRANSPARENT)
             previous.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_menu_cursor_space, 0, 0, 0)
@@ -539,64 +598,254 @@ class MainActivity : AppCompatActivity() {
         entry.setBackgroundResource(R.drawable.bg_entry_selected)
         entry.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_menu_cursor, 0, 0, 0)
         entry.setTextColor(getColor(R.color.pes_gold))
+        if (reveal) revealDetailPanel()
     }
 
-    /** A newer published APK, if there is one: silent when offline. */
-    private fun checkForUpdates() {
-        thread(name = "update-check", isDaemon = true) {
-            try {
-                if (RELEASES_API.isEmpty()) throw IllegalStateException("no release feed")
-                val connection = (URL(RELEASES_API)
-                    .openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 15000
-                    readTimeout = 15000
-                    setRequestProperty("Accept", "application/vnd.github+json")
-                }
-                if (connection.responseCode == 200) {
-                    val release = JSONObject(connection.inputStream.bufferedReader().readText())
-                    val assets = release.optJSONArray("assets")
-                    val apk = assets?.let { list ->
-                        (0 until list.length()).map { list.getJSONObject(it) }
-                            .firstOrNull { it.optString("name").endsWith(".apk", ignoreCase = true) }
-                    }
-                    val tag = release.optString("tag_name")
-                    val code = Regex("APK versionCode:\\s*(\\d+)")
-                        .find(release.optString("body"))?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                    val installed = packageManager.getPackageInfo(packageName, 0).let {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) it.longVersionCode.toInt()
-                        else it.versionCode
-                    }
-                    // The latest published release only: older ones stay buried.
-                    if (apk != null && code > installed && tag.isNotEmpty() && tag != prefs.seenUpdateTag) {
-                        val page = release.optString("html_url")
-                        val apkUrl = apk.optString("browser_download_url")
-                        val notes = release.optString("body").take(1500)
-                        runOnUiThread { showUpdateDialog(tag, page, apkUrl, notes, installed, code) }
-                    }
-                }
-            } catch (_: Throwable) {
+    /**
+     * Portrait only, and only when the panel is off screen already: scroll the
+     * column so the chosen entry's detail panel follows the cursor. A
+     * landscape layout has no menu_scroll, so this is a no-op there.
+     */
+    private fun revealDetailPanel() {
+        val scroller = menuScroll ?: return
+        val panel = (detailTitle.parent as? android.view.View) ?: detailTitle
+        scroller.post {
+            if (isFinishing || isDestroyed) return@post
+            val visible = android.graphics.Rect()
+            if (!panel.getGlobalVisibleRect(visible)) {
+                scroller.smoothScrollTo(0, panel.top - scroller.paddingTop)
             }
         }
     }
 
-    private fun showUpdateDialog(tag: String, page: String, apkUrl: String, notes: String, installed: Int, code: Int) {
+    // ---- the update check -------------------------------------------------------
+
+    /**
+     * The automatic check at launch: it answers from the six-hour cache when it
+     * can, so a rotation shows the badge again without asking GitHub, and it
+     * asks at most once per process. It never opens a dialog; a newer release
+     * is a line on the CHECK FOR UPDATES entry.
+     */
+    private fun autoUpdateCheck() {
+        checkForUpdates(manual = false)
+    }
+
+    /**
+     * Reads the release feed, or answers from the six-hour cache when this is
+     * not the player asking. [manual] is the entry's own click: it ignores the
+     * cache and the skipped version, and always ends with an answer -- the
+     * update dialog, the newest-build toast, or the failure toast.
+     *
+     * A tap while a check is in flight is not dropped: it is queued, the entry
+     * says a check is running, and the result now on its way answers it. Every
+     * end of a check puts an answer in the detail panel, so it cannot stay on
+     * "Checking...".
+     */
+    private fun checkForUpdates(manual: Boolean) {
+        val installed = installedCode()
+        val installedVersion = installedName()
+        if (!manual) {
+            val last = prefs.lastUpdateCheckAt
+            if (last > 0 && System.currentTimeMillis() - last in 0 until UPDATE_CACHE_MS) {
+                showUpdateBadge(cachedUpdateTag(installed, installedVersion))
+                return
+            }
+            // A failed check left no cache to answer from: the process asked
+            // once already and does not ask again from a recreated activity.
+            if (autoCheckedThisProcess) return
+        }
+        if (!updateCheckRunning.compareAndSet(false, true)) {
+            if (manual) {
+                // The running check's result will be presented as the answer.
+                manualCheckQueued = true
+                checkUpdate.text = getString(R.string.update_checking)
+                Toast.makeText(this, R.string.update_checking, Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        manualCheckQueued = false
+        autoCheckedThisProcess = true
+        if (manual) checkUpdate.text = getString(R.string.update_checking)
+        thread(name = "update-check", isDaemon = true) {
+            var release: UpdateFeed.Release? = null
+            var failed = false
+            try {
+                if (RELEASES_API.isEmpty()) throw IllegalStateException("no release feed")
+                val connection = (URL(RELEASES_API).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 15000
+                    readTimeout = 15000
+                    setRequestProperty("Accept", "application/vnd.github+json")
+                    setRequestProperty("User-Agent", "pes2018-recomp/$installedVersion")
+                }
+                try {
+                    if (connection.responseCode != 200) {
+                        throw IllegalStateException("HTTP ${connection.responseCode}")
+                    }
+                    val releases = UpdateFeed.parseReleases(
+                        connection.inputStream.bufferedReader().readText(),
+                    )
+                    if (releases.isEmpty()) throw IllegalStateException("empty feed")
+                    release = UpdateFeed.pickUpdate(
+                        releases, installed, installedVersion,
+                        UpdateFeed.allowPrerelease(installedVersion),
+                    )
+                } finally {
+                    connection.disconnect()
+                }
+                // Only an answer that was read is cached; a failed check is not,
+                // so the next launch asks again (never this one).
+                prefs.lastUpdateCheckAt = System.currentTimeMillis()
+                prefs.lastUpdateTag = release?.tag ?: ""
+                prefs.lastUpdateCode = release?.code ?: 0
+            } catch (_: Throwable) {
+                failed = true
+            }
+            updateCheckRunning.set(false)
+            val queued = manualCheckQueued
+            manualCheckQueued = false
+            val found = release
+            val answer = manual || queued
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (failed) {
+                    // The badge is whatever it was before this check: a failed
+                    // check is not evidence that the cached answer went away.
+                    showUpdateBadge(shownUpdateTag)
+                    showUpdateDetail(getString(R.string.update_check_failed))
+                    if (answer) {
+                        Toast.makeText(this, R.string.update_check_failed, Toast.LENGTH_LONG).show()
+                    }
+                    return@runOnUiThread
+                }
+                if (found != null) {
+                    showUpdateBadge(found.tag)
+                    val detail = if (found.code > 0) {
+                        getString(R.string.update_available_entry, found.tag) + "\n\n" +
+                            getString(R.string.update_message, installed, found.code)
+                    } else {
+                        getString(R.string.update_available_entry, found.tag) + "\n\n" +
+                            getString(R.string.update_no_version)
+                    }
+                    showUpdateDetail(detail)
+                    if (answer) showUpdateDialog(found, installed)
+                } else {
+                    showUpdateBadge("")
+                    showUpdateDetail(getString(R.string.update_up_to_date, installed))
+                    if (answer) {
+                        Toast.makeText(
+                            this, getString(R.string.update_up_to_date, installed), Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
+
+    /** The detail panel follows the check only while CHECK FOR UPDATES is selected. */
+    private fun showUpdateDetail(text: String) {
+        if (selectedEntry === checkUpdate) {
+            showDetail(getString(R.string.check_for_updates), text)
+        }
+    }
+
+    /** The entry says a newer release exists, unless it is the skipped one. */
+    private fun showUpdateBadge(tag: String) {
+        shownUpdateTag = tag
+        checkUpdate.text = if (tag.isNotEmpty() && tag != prefs.seenUpdateTag) {
+            getString(R.string.update_available_entry, tag)
+        } else {
+            getString(R.string.check_for_updates)
+        }
+    }
+
+    /**
+     * The tag the last check pointed at, if it is still newer than what this
+     * phone runs: after the update is installed, the cached answer is stale
+     * for up to six hours and must not keep offering the build now installed.
+     * A name-only answer is judged with the feed's own version rules, so it is
+     * never compared as a plain string.
+     */
+    private fun cachedUpdateTag(installed: Int, installedVersion: String): String {
+        val tag = prefs.lastUpdateTag
+        if (tag.isEmpty()) return ""
+        val code = prefs.lastUpdateCode
+        if (code > 0) return if (code > installed) tag else ""
+        return if (UpdateFeed.isNewerName(installedVersion, tag)) tag else ""
+    }
+
+    /** The installed build number, or 0 if the package manager will not say. */
+    private fun installedCode(): Int = try {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode.toInt()
+        else info.versionCode
+    } catch (_: Throwable) {
+        0
+    }
+
+    private fun installedName(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+    } catch (_: Throwable) {
+        ""
+    }
+
+    /**
+     * What the release offers, in the player's words: the build it carries, a
+     * test-build warning, the hash the download is checked against, and the
+     * notes with their markdown taken out. A release whose body names no build
+     * number cannot be compared, so it is offered as a page to open only.
+     */
+    private fun showUpdateDialog(release: UpdateFeed.Release, installed: Int) {
+        if (isFinishing || isDestroyed) return
+        val sections = mutableListOf<String>()
+        if (release.code > 0) sections += getString(R.string.update_message, installed, release.code)
+        else sections += getString(R.string.update_no_version)
+        if (release.prerelease) sections += getString(R.string.update_prerelease_warning)
+        if (release.sha256.isNotEmpty()) sections += getString(R.string.update_sha, release.sha256)
+        val notes = cleanNotes(release.notes)
+        if (notes.isNotEmpty()) sections += notes
+
         val body = TextView(this)
         body.setPadding(32, 8, 32, 8)
         body.textSize = 12f
-        body.text = getString(R.string.update_message, installed, code) + "\n\n" + notes
+        body.text = sections.joinToString("\n\n")
         val scroll = ScrollView(this)
         scroll.addView(body)
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.update_title, tag))
+
+        val page = release.pageUrl.ifEmpty { RELEASES_PAGE }
+        val builder = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_title, release.tag))
             .setView(scroll)
-            .setPositiveButton(R.string.update_download) { _, _ ->
-                if (apkUrl.isNotEmpty()) downloadAndInstall(apkUrl)
-                else openPage(page)
+        if (release.code > 0) {
+            if (release.apkUrl.isNotEmpty()) {
+                builder.setPositiveButton(R.string.update_download) { _, _ ->
+                    downloadAndInstall(release)
+                }
+            } else {
+                builder.setPositiveButton(R.string.update_open_page) { _, _ -> openPage(page) }
             }
-            .setNeutralButton(R.string.skip_version) { _, _ -> prefs.seenUpdateTag = tag }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
+            builder.setNeutralButton(R.string.skip_version) { _, _ ->
+                prefs.seenUpdateTag = release.tag
+                showUpdateBadge(release.tag)
+            }
+        } else {
+            builder.setPositiveButton(R.string.update_open_page) { _, _ -> openPage(page) }
+        }
+        builder.setNegativeButton(R.string.cancel, null).show()
     }
+
+    /**
+     * The release notes as text: markdown tables dropped, headings unhashed,
+     * bold markers gone, runs of blank lines closed up, and the whole thing
+     * cut where a dialog can still scroll through it.
+     */
+    private fun cleanNotes(notes: String): String = notes.lineSequence()
+        .map { it.trim() }
+        .filterNot { it.startsWith("|") }
+        .map { it.trimStart('#').trim().replace("**", "").trim() }
+        .joinToString("\n")
+        .replace(Regex("\n{3,}"), "\n\n")
+        .trim()
+        .take(1200)
 
     private fun openPage(page: String) {
         try {
@@ -605,11 +854,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun downloadAndInstall(apkUrl: String) {
+    /**
+     * The APK the player asked for: still the repository's own download path,
+     * over https, nothing else. The permission screen is asked for first when
+     * the app may not install packages; the URL is kept so onResume starts the
+     * download the player already agreed to.
+     */
+    private fun downloadAndInstall(release: UpdateFeed.Release) {
+        val page = release.pageUrl.ifEmpty { RELEASES_PAGE }
+        val apkUrl = release.apkUrl
+        if (!isReleaseDownload(apkUrl)) {
+            openPage(page)
+            return
+        }
         if (!packageManager.canRequestPackageInstalls()) {
-            // System sends the user to allow installs from this app; the
-            // download starts when they come back (onResume).
             pendingUpdateUrl = apkUrl
+            pendingUpdateTag = release.tag
+            pendingUpdateSha = release.sha256
             try {
                 startActivity(
                     Intent(
@@ -619,32 +880,167 @@ class MainActivity : AppCompatActivity() {
                 )
             } catch (_: Throwable) {
                 pendingUpdateUrl = null
+                pendingUpdateTag = ""
+                pendingUpdateSha = ""
+                openPage(page)
             }
             return
         }
-        startUpdateDownload(apkUrl)
+        startUpdateDownload(apkUrl, release.tag, release.sha256)
     }
 
-    private fun startUpdateDownload(apkUrl: String) {
+    /** github.com, https, and this repository's release download folder only. */
+    private fun isReleaseDownload(url: String): Boolean = try {
+        val parsed = java.net.URI(url)
+        parsed.scheme.equals("https", ignoreCase = true) &&
+            parsed.host.equals("github.com", ignoreCase = true) &&
+            (parsed.path ?: "").startsWith("/sharifhidayatulloh/pes2018-recomp/releases/download/")
+    } catch (_: Throwable) {
+        false
+    }
+
+    private fun startUpdateDownload(apkUrl: String, tag: String, sha256: String) {
+        if (!isReleaseDownload(apkUrl)) {
+            openPage(RELEASES_PAGE)
+            return
+        }
         try {
+            val name = "PES2018-recomp-" + sanitizedTag(tag) + ".apk"
+            // The manager refuses a destination that exists, so a retry of the
+            // same version first drops the file the last attempt left.
+            try {
+                File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), name).delete()
+            } catch (_: Throwable) {
+            }
             val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
             val request = DownloadManager.Request(Uri.parse(apkUrl))
                 .setTitle("PES 2018 update")
                 .setDescription("Downloading APK")
+                .setMimeType("application/vnd.android.package-archive")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "pes18-update.apk")
+                .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, name)
                 .setAllowedOverMetered(true)
             pendingInstallId = manager.enqueue(request)
+            pendingUpdateSha = sha256
+            pendingDownloadName = name
             Toast.makeText(this, R.string.update_downloading, Toast.LENGTH_SHORT).show()
         } catch (_: Throwable) {
-            if (RELEASES_PAGE.isNotEmpty()) openPage(RELEASES_PAGE)
+            openPage(RELEASES_PAGE)
         }
     }
 
+    private fun sanitizedTag(tag: String): String =
+        tag.replace(Regex("[^A-Za-z0-9._-]"), "-").ifEmpty { "update" }
+
+    /**
+     * The end of a download can be missed: the broadcast is not kept for a
+     * process that was killed, and a launcher resumed later would otherwise
+     * wait forever. Ask the manager itself; a finished file takes the same
+     * hash-check path as the broadcast, and a failed one is cleaned up. The
+     * expected hash is left in place until the result is known.
+     */
+    private fun reconcilePendingDownload() {
+        val id = pendingInstallId
+        if (id < 0) return
+        val manager = getSystemService(DOWNLOAD_SERVICE) as? DownloadManager ?: return
+        var status = -1
+        try {
+            manager.query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val column = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                    if (column >= 0) status = cursor.getInt(column)
+                }
+            }
+        } catch (_: Throwable) {
+            return
+        }
+        when (status) {
+            DownloadManager.STATUS_SUCCESSFUL -> {
+                pendingInstallId = -1
+                installDownloadedApk(id)
+            }
+            DownloadManager.STATUS_FAILED -> {
+                pendingInstallId = -1
+                discardDownload(manager, id)
+                pendingDownloadName = ""
+                pendingUpdateSha = ""
+                Toast.makeText(this, R.string.update_failed, Toast.LENGTH_LONG).show()
+            }
+            // PENDING / RUNNING / PAUSED: the broadcast still brings the end.
+        }
+    }
+
+    /**
+     * The download the player started has finished: check it against the
+     * release's own SHA-256 before anything is offered to the installer, on a
+     * thread because it reads the whole file. A hash that does not match is a
+     * file that is thrown away, never installed.
+     */
     private fun installDownloadedApk(id: Long) {
+        val expected = pendingUpdateSha
+        pendingUpdateSha = ""
+        if (expected.isEmpty()) {
+            offerInstall(id)
+            return
+        }
+        val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+        thread(name = "update-verify", isDaemon = true) {
+            val actual = try {
+                sha256Of(manager, id)
+            } catch (_: Throwable) {
+                ""
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (actual.equals(expected, ignoreCase = true)) {
+                    offerInstall(id)
+                } else {
+                    discardDownload(manager, id)
+                    AlertDialog.Builder(this)
+                        .setMessage(R.string.update_failed)
+                        .setPositiveButton(R.string.open_page) { _, _ -> openPage(RELEASES_PAGE) }
+                        .setNegativeButton(R.string.cancel, null)
+                        .show()
+                }
+            }
+        }
+    }
+
+    /** The installed file's SHA-256, from the URI the manager hands out. */
+    private fun sha256Of(manager: DownloadManager, id: Long): String {
+        val uri = manager.getUriForDownloadedFile(id) ?: return ""
+        val digest = MessageDigest.getInstance("SHA-256")
+        contentResolver.openInputStream(uri)?.use { stream ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = stream.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        } ?: return ""
+        return digest.digest().joinToString("") { String.format(Locale.ROOT, "%02x", it) }
+    }
+
+    /** A file that failed its check: removed from Downloads and from the list. */
+    private fun discardDownload(manager: DownloadManager, id: Long) {
+        try {
+            manager.remove(id)
+        } catch (_: Throwable) {
+        }
+        if (pendingDownloadName.isEmpty()) return
+        try {
+            File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), pendingDownloadName).delete()
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** Hands the file to the system installer, which asks its own questions. */
+    private fun offerInstall(id: Long) {
+        if (isFinishing || isDestroyed) return
         try {
             val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            val uri = manager.getUriForDownloadedFile(id) ?: return
+            val uri = manager.getUriForDownloadedFile(id)
+                ?: throw IllegalStateException("the download is gone")
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -660,10 +1056,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        // No release feed yet for this port: the 2017 repository's releases are a
-        // different app and must never be offered as an update of this one.
-        private const val RELEASES_PAGE = ""
-        private const val RELEASES_API = ""
+        private const val RELEASES_API =
+            "https://api.github.com/repos/sharifhidayatulloh/pes2018-recomp/releases?per_page=10"
+        private const val RELEASES_PAGE =
+            "https://github.com/sharifhidayatulloh/pes2018-recomp"
+        private const val UPDATE_CACHE_MS = 6 * 60 * 60 * 1000L
+
+        private const val STATE_INSTALL_ID = "pes17.installId"
+        private const val STATE_UPDATE_URL = "pes17.updateUrl"
+        private const val STATE_UPDATE_TAG = "pes17.updateTag"
+        private const val STATE_UPDATE_SHA = "pes17.updateSha"
+        private const val STATE_DOWNLOAD_NAME = "pes17.downloadName"
+        private const val STATE_AUTO_LAUNCHED = "pes17.autoLaunched"
+        private const val STATE_SELECTED = "pes17.selected"
+
+        /** Set once this process has asked GitHub: a recreated activity must not ask again. */
+        @Volatile
+        private var autoCheckedThisProcess = false
     }
 
     private fun showLastCrash(crash: String) {

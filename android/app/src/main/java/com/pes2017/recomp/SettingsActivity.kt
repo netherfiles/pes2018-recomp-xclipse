@@ -239,6 +239,10 @@ class SettingsActivity : AppCompatActivity() {
             exportDiagnostics(it as Button)
         }
         findViewById<Button>(R.id.clear_logs).setOnClickListener { clearLogs() }
+        // ABOUT sits outside the tabs, so it is reachable from every one of them.
+        findViewById<Button>(R.id.about_row).setOnClickListener {
+            startActivity(Intent(this, AboutActivity::class.java))
+        }
     }
 
     override fun onResume() {

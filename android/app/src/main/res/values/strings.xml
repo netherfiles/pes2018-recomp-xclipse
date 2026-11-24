@@ -531,4 +531,25 @@
     <string name="patch_install_phase_cleaning">Cleaning up…</string>
     <string name="patch_install_done">Patch installed</string>
     <string name="patch_import_stopping">STOPPING AFTER THE CURRENT FILE…</string>
+    <!-- revision 10.1: the update check and the About screen -->
+    <string name="check_for_updates">CHECK FOR UPDATES</string>
+    <string name="update_checking">Checking for updates…</string>
+    <string name="update_up_to_date">You are on the newest build (build %1$d).</string>
+    <string name="update_check_failed">Could not check for updates. Check your connection.</string>
+    <string name="update_available_entry">UPDATE AVAILABLE: %1$s</string>
+    <string name="update_prerelease_warning">Test build: it may crash. Include the build string when reporting.</string>
+    <string name="update_open_page">Open release page</string>
+    <string name="update_sha">SHA-256: %1$s</string>
+    <string name="update_no_version">A newer release exists but its build number could not be read. Open the release page.</string>
+
+    <!-- the About screen -->
+    <string name="about_title">About</string>
+    <string name="about_project">PES 2018 recomp — a fan recompilation of Pro Evolution Soccer 2018 for Android.</string>
+    <string name="about_source">Source code for this build</string>
+    <string name="about_license">License</string>
+    <string name="about_not_affiliated">Not affiliated with Konami. No game data is included.</string>
+    <string name="about_credits">Built on earlier work: mw2-recompiled by PaulCombal and GuruMachanica (GPL-3.0) supplied the Xbox 360 runtime and launcher scaffold this port was adapted from, and dzakyraf/pes2017-recomp is the PES 2017 port upstream. XenonRecomp is by hedge-dev; the repository README carries the full list.</string>
+    <string name="about_third_party">GitHub mark: Octicons, MIT license.</string>
+    <string name="about_octicons_license">GitHub mark (Octicons) — MIT License.\n\nCopyright (c) GitHub, Inc.\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</string>
+    <string name="about_row">About PES 2018 recomp</string>
 </resources>

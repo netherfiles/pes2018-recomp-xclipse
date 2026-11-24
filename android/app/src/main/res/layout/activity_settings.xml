@@ -1091,6 +1091,16 @@
 
             </LinearLayout>
 
+            <!-- ABOUT: the name, the build, the source and the licence, one page.
+                 Outside the tabs, so it is reachable from every one of them. -->
+            <Button
+                android:id="@+id/about_row"
+                style="@style/ActionButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/about_row" />
+
         </LinearLayout>
     </ScrollView>
 
