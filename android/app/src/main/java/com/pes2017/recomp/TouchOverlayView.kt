@@ -84,6 +84,32 @@ class TouchOverlayView @JvmOverloads constructor(
     private var lookLastX = 0f
     private var lookLastY = 0f
 
+    // The d-pad is one cross under one finger: id -> the bit it holds now.
+    // A second finger on the cross is ignored, and a bit that was let go
+    // stays down for a moment so a tap shorter than a frame is still seen.
+    private var dpadPointer = -1
+    private val dpadBits = HashMap<String, Int>()
+    private var dpadClear: Runnable? = null
+
+    // A macro is playing: the fingers are not heard. A state push that
+    // happens during the run is remembered and sent once it ends, so a bit
+    // let go mid-run cannot stay down. Nothing is sent during the run.
+    private var pendingPush = false
+    private var macroFlushScheduled = false
+    private val macroFlush = object : Runnable {
+        override fun run() {
+            if (Macro.playing) {
+                postDelayed(this, MACRO_FLUSH_MS)
+                return
+            }
+            macroFlushScheduled = false
+            if (pendingPush) {
+                pushState()
+                invalidate()
+            }
+        }
+    }
+
     // ---- editing -----------------------------------------------------------
     private var dragPointer = -1
     private var dragElement: ControlElement? = null
@@ -155,23 +181,42 @@ class TouchOverlayView @JvmOverloads constructor(
         // A touch a little outside still counts: glass has no edges to feel,
         // and a button that needs to be hit exactly is a button that gets
         // missed in a firefight.
-        val slack = 6f * density
+        val slack = TOUCH_SLACK_DP * density
         return hypot(x - centreX(element), y - centreY(element)) <= radius(element) + slack
     }
 
-    /** Buttons first, the look area last: it sits under everything. */
+    /**
+     * The control nearest the finger, measured as the share of its touch
+     * radius the finger sits at, so a small button inside a big one's slack
+     * still wins. Buttons first, the look area last: it sits under everything.
+     */
     private fun elementAt(x: Float, y: Float, includeHidden: Boolean = false): ControlElement? {
+        var best: ControlElement? = null
+        var bestReach = Float.MAX_VALUE
         for (element in layout.elements) {
             if (element.kind == ControlKind.LOOK) continue
             if (!element.visible && !includeHidden) continue
-            if (hit(element, x, y)) return element
+            val reach = touchShare(element, x, y) ?: continue
+            if (reach < bestReach) {
+                bestReach = reach
+                best = element
+            }
         }
+        if (best != null) return best
         for (element in layout.elements) {
             if (element.kind != ControlKind.LOOK) continue
             if (!element.visible && !includeHidden) continue
             if (hit(element, x, y)) return element
         }
         return null
+    }
+
+    /** How far into a control's touch reach a finger is (0 at its middle), or null when it misses. */
+    private fun touchShare(element: ControlElement, x: Float, y: Float): Float? {
+        val reach = radius(element) + TOUCH_SLACK_DP * density
+        val distance = hypot(x - centreX(element), y - centreY(element))
+        if (distance > reach) return null
+        return distance / reach
     }
 
     // ---- the state the guest sees -------------------------------------------
@@ -206,14 +251,33 @@ class TouchOverlayView @JvmOverloads constructor(
                     }
                 }
                 ControlKind.LOOK -> Unit   // sent as deltas, not as a stick
+                ControlKind.DPAD -> buttons = buttons or (dpadBits[element.id] ?: 0)
             }
         }
-        // A macro is playing: the fingers are not heard, so a run repeats exactly.
-        if (Macro.playing) return
+        // A macro is playing: the fingers are not heard, so a run repeats
+        // exactly. Remember the push instead: once the run ends it is sent,
+        // or a bit let go mid-run would stay down forever.
+        if (Macro.playing) {
+            pendingPush = true
+            scheduleMacroFlush()
+            return
+        }
+        pendingPush = false
         val lx = leftX.coerceIn(-1f, 1f); val ly = leftY.coerceIn(-1f, 1f)
         val rx = rightX.coerceIn(-1f, 1f); val ry = rightY.coerceIn(-1f, 1f)
         Macro.record(Macro.TOUCH, buttons, leftTrigger, rightTrigger, lx, ly, rx, ry)
         NativeBridge.nativeTouchState(buttons, leftTrigger, rightTrigger, lx, ly, rx, ry)
+    }
+
+    /**
+     * Waits for the macro to stop, then sends the state that moved during it.
+     * Nothing is sent while [Macro.playing] is true, so a run keeps repeating
+     * exactly; the overlay's state goes out once the run is over.
+     */
+    private fun scheduleMacroFlush() {
+        if (macroFlushScheduled) return
+        macroFlushScheduled = true
+        postDelayed(macroFlush, MACRO_FLUSH_MS)
     }
 
     /** Everything up: called when the pad is hidden, edited, or paused. */
@@ -221,6 +285,9 @@ class TouchOverlayView @JvmOverloads constructor(
         claims.clear()
         stickPositions.clear()
         held.clear()
+        // A d-pad bit is let go at once here: nothing may stay down after a
+        // pause, the editor opening, or a cancelled gesture.
+        clearDpad()
         // Toggles survive a pause -- a player who was aiming down sights
         // before the phone rang is still aiming when they come back -- but
         // not the editor, which would otherwise leave a bit stuck down.
@@ -266,6 +333,7 @@ class TouchOverlayView @JvmOverloads constructor(
                     val element = claims[id] ?: continue
                     when (element.kind) {
                         ControlKind.STICK -> { moveStick(element, x, y); changed = true }
+                        ControlKind.DPAD -> if (id == dpadPointer && moveDpad(element, x, y)) changed = true
                         else -> Unit
                     }
                 }
@@ -306,6 +374,9 @@ class TouchOverlayView @JvmOverloads constructor(
             lookLastY = y
             return false
         }
+        // The cross belongs to the first finger on it: a thumb that lands
+        // on it while another already points must not take the direction.
+        if (element.kind == ControlKind.DPAD && dpadPointer != -1) return false
         triggerHaptic()
         claims[pointerId] = element
         when (element.kind) {
@@ -316,6 +387,11 @@ class TouchOverlayView @JvmOverloads constructor(
                 } else {
                     held.add(element.id)
                 }
+            }
+            ControlKind.DPAD -> {
+                dpadPointer = pointerId
+                cancelDpadClear()
+                moveDpad(element, x, y)
             }
             ControlKind.LOOK -> Unit
         }
@@ -331,9 +407,57 @@ class TouchOverlayView @JvmOverloads constructor(
         val element = claims.remove(pointerId) ?: return false
         when (element.kind) {
             ControlKind.STICK -> stickPositions.remove(element.id)
+            ControlKind.DPAD -> return releaseDpad(element)
             else -> held.remove(element.id)
         }
         return true
+    }
+
+    /**
+     * The bit under the finger, or 0 with none: inside the cross it follows
+     * the finger, and outside it the last direction is kept, so sliding off
+     * the edge does not snap the player somewhere else.
+     */
+    private fun moveDpad(element: ControlElement, x: Float, y: Float): Boolean {
+        val dx = x - centreX(element)
+        val dy = y - centreY(element)
+        if (hypot(dx, dy) > radius(element)) return false
+        val bit = dpadBitFor(dx, dy, radius(element))
+        if (bit == (dpadBits[element.id] ?: 0)) return false
+        if (bit == 0) dpadBits.remove(element.id) else dpadBits[element.id] = bit
+        return true
+    }
+
+    /**
+     * Lets the d-pad go: the bit stays down for [DPAD_HOLD_MS] so the game,
+     * which reads its pad once a frame, still sees a quick tap. Nothing is
+     * held after a cancellation or a pause -- those call [clearDpad].
+     */
+    private fun releaseDpad(element: ControlElement): Boolean {
+        dpadPointer = -1
+        if (dpadBits[element.id] == null) return false
+        cancelDpadClear()
+        val clear = Runnable {
+            dpadBits.remove(element.id)
+            dpadClear = null
+            if (NativeBridge.isLoaded()) pushState()
+            invalidate()
+        }
+        dpadClear = clear
+        postDelayed(clear, DPAD_HOLD_MS)
+        return true
+    }
+
+    /** Drops every d-pad bit now, pending timed releases included. */
+    private fun clearDpad() {
+        cancelDpadClear()
+        dpadBits.clear()
+        dpadPointer = -1
+    }
+
+    private fun cancelDpadClear() {
+        dpadClear?.let { removeCallbacks(it) }
+        dpadClear = null
     }
 
     private fun sendLook(x: Float, y: Float) {
@@ -385,9 +509,11 @@ class TouchOverlayView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
-                // Two fingers on the selected control resize it.
+                // Two fingers on the selected control resize it; two thumbs
+                // on two different controls are not a pinch, and must not
+                // resize the one that happened to be selected.
                 val element = dragElement ?: selected
-                if (element != null && event.pointerCount == 2) {
+                if (element != null && event.pointerCount == 2 && bothOn(element, event)) {
                     pinching = true
                     pinchStartDistance = max(1f, spread(event))
                     pinchStartSize = element.sizeDp
@@ -481,11 +607,18 @@ class TouchOverlayView @JvmOverloads constructor(
         invalidate()
     }
 
-    private fun minimumSize(element: ControlElement): Float =
-        if (element.kind == ControlKind.LOOK) 120f else 36f
+    private fun minimumSize(element: ControlElement): Float = ControlLayout.sizeRange(element.kind).first
 
-    private fun maximumSize(element: ControlElement): Float =
-        if (element.kind == ControlKind.LOOK) 900f else 200f
+    private fun maximumSize(element: ControlElement): Float = ControlLayout.sizeRange(element.kind).second
+
+    /** True when both fingers of [event] are on (or within the slack of) [element]. */
+    private fun bothOn(element: ControlElement, event: MotionEvent): Boolean {
+        if (event.pointerCount < 2) return false
+        for (index in 0 until 2) {
+            if (!hit(element, event.getX(index), event.getY(index))) return false
+        }
+        return true
+    }
 
     private fun spread(event: MotionEvent): Float {
         if (event.pointerCount < 2) return 1f
@@ -502,9 +635,13 @@ class TouchOverlayView @JvmOverloads constructor(
             when (element.kind) {
                 ControlKind.LOOK -> drawLook(canvas, element, faded)
                 ControlKind.STICK -> drawStick(canvas, element, alpha, faded)
+                ControlKind.DPAD -> drawDpad(canvas, element, alpha, faded)
                 ControlKind.BUTTON, ControlKind.TRIGGER -> drawButton(canvas, element, alpha, faded)
             }
-            if (editing && element === selected) drawSelection(canvas, element)
+            // The d-pad draws its own square ring around the cross.
+            if (editing && element === selected && element.kind != ControlKind.DPAD) {
+                drawSelection(canvas, element)
+            }
         }
     }
 
@@ -518,6 +655,24 @@ class TouchOverlayView @JvmOverloads constructor(
         held.contains(element.id) || toggled.contains(element.id)
 
     companion object {
+        /** How long a d-pad bit stays down after the finger left, in milliseconds. */
+        private const val DPAD_HOLD_MS = 50L
+
+        /** How often a pending push waits for a playing macro to end, in milliseconds. */
+        private const val MACRO_FLUSH_MS = 50L
+
+        /** The extra reach, in dp, a finger gets around a control's drawn edge. */
+        private const val TOUCH_SLACK_DP = 6f
+
+        /** The four d-pad bits, in the order the keys are drawn. */
+        private val DPAD_KEYS = intArrayOf(
+            NativeBridge.UP, NativeBridge.DOWN, NativeBridge.LEFT, NativeBridge.RIGHT,
+        )
+
+        /** All four directions at once, the value the d-pad element carries. */
+        private val DPAD_BITS =
+            NativeBridge.UP or NativeBridge.DOWN or NativeBridge.LEFT or NativeBridge.RIGHT
+
         // The Xbox 360 pad colours, because the game's own prompts use them
         private const val COLOR_A = 0xFF107C10.toInt()      // Emerald Green
         private const val COLOR_A_GLOW = 0xFF22C55E.toInt()
@@ -862,6 +1017,112 @@ class TouchOverlayView @JvmOverloads constructor(
         canvas.drawCircle(knobX - dotOffset, knobY, dotRadius, dimplePaint)
         // Right dot
         canvas.drawCircle(knobX + dotOffset, knobY, dotRadius, dimplePaint)
+    }
+
+    /**
+     * The d-pad as a DualShock has it: four separate rounded keys in a cross,
+     * no base dish, an arrow on each pointing out. One element, so the editor
+     * moves and sizes the whole cross at once. The label and the square
+     * selection ring are for the editor only.
+     */
+    private fun drawDpad(canvas: Canvas, element: ControlElement, alpha: Float, faded: Boolean) {
+        val size = element.sizeDp * density
+        val half = size * 0.5f
+        val cx = centreX(element)
+        val cy = centreY(element)
+        val left = cx - half
+        val top = cy - half
+        val fadeFactor = if (faded) 0.45f else 1f
+        val pressed = (dpadBits[element.id] ?: 0) and DPAD_BITS
+
+        // The keys have a real gap, but light the pressed one last anyway: a
+        // neighbour is never drawn over it.
+        for (bit in DPAD_KEYS) {
+            if (bit != pressed) drawDpadKey(canvas, left, top, size, bit, false, alpha, fadeFactor)
+        }
+        if (pressed != 0) {
+            drawDpadKey(canvas, left, top, size, pressed, true, alpha, fadeFactor)
+        }
+
+        if (!editing) return
+        if (element === selected) {
+            stroke.color = Color.argb(230, 120, 200, 120)
+            stroke.strokeWidth = 2.5f * density
+            box.set(left, top, cx + half, cy + half)
+            canvas.drawRoundRect(box, 16f * density, 16f * density, stroke)
+        }
+        text.textSize = 11f * density
+        text.color = Color.argb((alpha * fadeFactor * 240).toInt().coerceIn(0, 255), 203, 213, 225)
+        canvas.drawText(element.label, cx, cy + half + 15f * density, text)
+    }
+
+    /** One key of the cross: a rounded square, its arrow, and the light when it is down. */
+    private fun drawDpadKey(
+        canvas: Canvas, left: Float, top: Float, size: Float,
+        bit: Int, pressed: Boolean, alpha: Float, fadeFactor: Float,
+    ) {
+        val key = size * DpadGeometry.KEY
+        val corner = key * DpadGeometry.CORNER
+        val x = when (bit) {
+            NativeBridge.UP, NativeBridge.DOWN -> left + size * DpadGeometry.OFFSET
+            NativeBridge.LEFT -> left + size * DpadGeometry.EDGE
+            else -> left + size * (1f - DpadGeometry.EDGE - DpadGeometry.KEY)
+        }
+        val y = when (bit) {
+            NativeBridge.UP -> top + size * DpadGeometry.EDGE
+            NativeBridge.DOWN -> top + size * (1f - DpadGeometry.EDGE - DpadGeometry.KEY)
+            else -> top + size * DpadGeometry.OFFSET
+        }
+        box.set(x, y, x + key, y + key)
+        fill.color = if (pressed) {
+            Color.argb((alpha * fadeFactor * 220).toInt().coerceIn(0, 255), 71, 85, 105)
+        } else {
+            Color.argb((alpha * fadeFactor * 140).toInt().coerceIn(0, 255), 24, 30, 38)
+        }
+        canvas.drawRoundRect(box, corner, corner, fill)
+
+        stroke.color = if (pressed) {
+            Color.argb((alpha * fadeFactor * 255).toInt().coerceIn(0, 255), 255, 255, 255)
+        } else {
+            Color.argb((alpha * fadeFactor * 128).toInt().coerceIn(0, 255), 148, 163, 184)
+        }
+        stroke.strokeWidth = max(1f, 1.5f * density)
+        canvas.drawRoundRect(box, corner, corner, stroke)
+
+        // The arrow, drawn as a triangle so no font is needed.
+        val arrow = key * 0.42f
+        val ax = x + key * 0.5f
+        val ay = y + key * 0.5f
+        path.reset()
+        when (bit) {
+            NativeBridge.UP -> {
+                path.moveTo(ax, ay - arrow * 0.45f)
+                path.lineTo(ax + arrow * 0.5f, ay + arrow * 0.35f)
+                path.lineTo(ax - arrow * 0.5f, ay + arrow * 0.35f)
+            }
+            NativeBridge.DOWN -> {
+                path.moveTo(ax, ay + arrow * 0.45f)
+                path.lineTo(ax + arrow * 0.5f, ay - arrow * 0.35f)
+                path.lineTo(ax - arrow * 0.5f, ay - arrow * 0.35f)
+            }
+            NativeBridge.LEFT -> {
+                path.moveTo(ax - arrow * 0.45f, ay)
+                path.lineTo(ax + arrow * 0.35f, ay + arrow * 0.5f)
+                path.lineTo(ax + arrow * 0.35f, ay - arrow * 0.5f)
+            }
+            else -> {
+                path.moveTo(ax + arrow * 0.45f, ay)
+                path.lineTo(ax - arrow * 0.35f, ay + arrow * 0.5f)
+                path.lineTo(ax - arrow * 0.35f, ay - arrow * 0.5f)
+            }
+        }
+        path.close()
+        fill.color = if (pressed) {
+            Color.argb((alpha * fadeFactor * 255).toInt().coerceIn(0, 255), 255, 255, 255)
+        } else {
+            Color.argb((alpha * fadeFactor * 230).toInt().coerceIn(0, 255), 203, 213, 225)
+        }
+        canvas.drawPath(path, fill)
     }
 
     private fun drawLook(canvas: Canvas, element: ControlElement, faded: Boolean) {

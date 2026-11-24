@@ -77,8 +77,7 @@ class ControlEditPanel(
             override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
                 if (!fromUser) return
                 val element = current ?: return
-                val smallest = if (element.kind == ControlKind.LOOK) 120f else 36f
-                val largest = if (element.kind == ControlKind.LOOK) 900f else 200f
+                val (smallest, largest) = ControlLayout.sizeRange(element.kind)
                 element.sizeDp = smallest + (largest - smallest) * (value / 100f)
                 overlay.refresh()
             }
@@ -192,6 +191,7 @@ class ControlEditPanel(
             size.isEnabled = false
             opacity.isEnabled = false
             visible.isEnabled = false
+            toggle.visibility = View.VISIBLE
             toggle.isEnabled = false
             return
         }
@@ -199,9 +199,16 @@ class ControlEditPanel(
         size.isEnabled = true
         opacity.isEnabled = true
         visible.isEnabled = true
-        toggle.isEnabled = element.kind == ControlKind.BUTTON || element.kind == ControlKind.TRIGGER
-        val smallest = if (element.kind == ControlKind.LOOK) 120f else 36f
-        val largest = if (element.kind == ControlKind.LOOK) 900f else 200f
+        val supportsToggle = element.kind == ControlKind.BUTTON || element.kind == ControlKind.TRIGGER
+        // The d-pad reads one finger as four directions, so a held direction
+        // would stick: it has no toggle at all, and no switch to offer one.
+        if (element.kind == ControlKind.DPAD && element.toggle) {
+            element.toggle = false
+            save()
+        }
+        toggle.visibility = if (element.kind == ControlKind.DPAD) View.GONE else View.VISIBLE
+        toggle.isEnabled = supportsToggle
+        val (smallest, largest) = ControlLayout.sizeRange(element.kind)
         size.progress = (((element.sizeDp - smallest) / (largest - smallest)) * 100f)
             .roundToInt().coerceIn(0, 100)
         opacity.progress = (element.alpha * 100f).roundToInt().coerceIn(0, 100)
