@@ -1,4 +1,4 @@
-Name: Build APK (Xclipse)
+name: Build APK (Xclipse)
 
 on:
   workflow_dispatch:
