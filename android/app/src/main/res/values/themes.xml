@@ -6,21 +6,15 @@
     <style name="Theme.PES17" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@color/pes_page</item>
         <item name="android:colorBackground">@color/pes_page</item>
-
         <item name="colorPrimary">@color/pes_navy</item>
         <item name="colorPrimaryDark">@color/pes_navy</item>
         <item name="colorAccent">@color/pes_red</item>
         <item name="colorControlActivated">@color/pes_red</item>
-
         <item name="android:textColorPrimary">@color/pes_text</item>
         <item name="android:textColorSecondary">@color/pes_muted</item>
-
         <item name="buttonStyle">@style/PanelButton</item>
         <item name="android:buttonStyle">@style/PanelButton</item>
-
         <item name="alertDialogTheme">@style/Theme.PES17.Dialog</item>
-
-        <!-- Dark system bars -->
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:statusBarColor">@color/pes_page</item>
@@ -31,19 +25,15 @@
     <style name="Theme.PES17.Game" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
         <item name="android:colorBackground">@android:color/black</item>
-
         <item name="colorPrimary">@color/pes_navy</item>
         <item name="colorPrimaryDark">@color/pes_page</item>
         <item name="colorAccent">@color/pes_gold</item>
-
         <item name="android:textColorPrimary">@color/pes_text</item>
         <item name="android:textColorSecondary">@color/pes_muted</item>
-
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:statusBarColor">@android:color/black</item>
         <item name="android:navigationBarColor">@android:color/black</item>
-
         <item name="alertDialogTheme">@style/Theme.PES17.Dialog</item>
     </style>
 
@@ -53,15 +43,11 @@
         <item name="colorPrimaryDark">@color/pes_navy</item>
         <item name="colorAccent">@color/pes_red</item>
         <item name="colorControlActivated">@color/pes_red</item>
-
         <item name="android:windowBackground">@color/pes_panel</item>
         <item name="android:colorBackground">@color/pes_panel</item>
-
         <item name="android:textColorPrimary">@color/pes_text</item>
         <item name="android:textColorSecondary">@color/pes_muted</item>
-
         <item name="alertDialogStyle">@style/PES17.AlertDialog</item>
-
         <item name="buttonBarPositiveButtonStyle">@style/DialogButton</item>
         <item name="buttonBarNegativeButtonStyle">@style/DialogButtonQuiet</item>
         <item name="buttonBarNeutralButtonStyle">@style/DialogButtonQuiet</item>
