@@ -1,66 +1,79 @@
+
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The launcher's screens: a white page, navy type, red controls. -->
-    <style name="Theme.PES17" parent="Theme.AppCompat.Light.NoActionBar">
+
+    <!-- XCLIPSE DARK EDITION -->
+    <style name="Theme.PES17" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@color/pes_page</item>
+        <item name="android:colorBackground">@color/pes_page</item>
+
         <item name="colorPrimary">@color/pes_navy</item>
         <item name="colorPrimaryDark">@color/pes_navy</item>
         <item name="colorAccent">@color/pes_red</item>
         <item name="colorControlActivated">@color/pes_red</item>
+
         <item name="android:textColorPrimary">@color/pes_text</item>
         <item name="android:textColorSecondary">@color/pes_muted</item>
+
         <item name="buttonStyle">@style/PanelButton</item>
         <item name="android:buttonStyle">@style/PanelButton</item>
+
         <item name="alertDialogTheme">@style/Theme.PES17.Dialog</item>
-        <!-- The app's pages are white: the system bars show dark icons and the
-             page colour, so the status bar's time and battery stay readable. -->
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
+
+        <!-- Dark system bars -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
         <item name="android:statusBarColor">@color/pes_page</item>
         <item name="android:navigationBarColor">@color/pes_page</item>
     </style>
 
-    <!-- The run: black behind the surface, and the dark pad editor over it. -->
+    <!-- GAME THEME -->
     <style name="Theme.PES17.Game" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
-        <item name="colorPrimary">#0E1A36</item>
-        <item name="colorPrimaryDark">#070D1C</item>
+        <item name="android:colorBackground">@android:color/black</item>
+
+        <item name="colorPrimary">@color/pes_navy</item>
+        <item name="colorPrimaryDark">@color/pes_page</item>
         <item name="colorAccent">@color/pes_gold</item>
-        <item name="android:textColorPrimary">#EAF1FF</item>
-        <item name="android:textColorSecondary">#8FA0C2</item>
+
+        <item name="android:textColorPrimary">@color/pes_text</item>
+        <item name="android:textColorSecondary">@color/pes_muted</item>
+
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:statusBarColor">@android:color/black</item>
         <item name="android:navigationBarColor">@android:color/black</item>
-        <!-- The in-game dialogs are the launcher's: a white panel over the run. -->
+
         <item name="alertDialogTheme">@style/Theme.PES17.Dialog</item>
     </style>
 
-    <!-- Every AlertDialog in the app (both themes point alertDialogTheme here):
-         the white panel with navy type, and buttons that are actually visible on
-         it. Base AlertDialog.AppCompat.Light leaves its borderless buttons with
-         a white label, which is invisible on the white panel. -->
-    <style name="Theme.PES17.Dialog" parent="Theme.AppCompat.Light.Dialog.Alert">
+    <!-- DARK ALERT DIALOGS -->
+    <style name="Theme.PES17.Dialog" parent="Theme.AppCompat.Dialog.Alert">
         <item name="colorPrimary">@color/pes_navy</item>
         <item name="colorPrimaryDark">@color/pes_navy</item>
         <item name="colorAccent">@color/pes_red</item>
         <item name="colorControlActivated">@color/pes_red</item>
+
+        <item name="android:windowBackground">@color/pes_panel</item>
+        <item name="android:colorBackground">@color/pes_panel</item>
+
         <item name="android:textColorPrimary">@color/pes_text</item>
         <item name="android:textColorSecondary">@color/pes_muted</item>
+
         <item name="alertDialogStyle">@style/PES17.AlertDialog</item>
+
         <item name="buttonBarPositiveButtonStyle">@style/DialogButton</item>
         <item name="buttonBarNegativeButtonStyle">@style/DialogButtonQuiet</item>
         <item name="buttonBarNeutralButtonStyle">@style/DialogButtonQuiet</item>
     </style>
 
-    <!-- The attrs AlertController reads with alertDialogStyle as defStyleAttr. -->
-    <style name="PES17.AlertDialog" parent="AlertDialog.AppCompat.Light">
+    <style name="PES17.AlertDialog" parent="AlertDialog.AppCompat">
         <item name="buttonBarPositiveButtonStyle">@style/DialogButton</item>
         <item name="buttonBarNegativeButtonStyle">@style/DialogButtonQuiet</item>
         <item name="buttonBarNeutralButtonStyle">@style/DialogButtonQuiet</item>
     </style>
 
-    <!-- The confirming action: the app's navy action button. -->
+    <!-- CONFIRMATION BUTTON -->
     <style name="DialogButton" parent="ActionButton">
         <item name="android:layout_marginStart">4dp</item>
         <item name="android:layout_marginEnd">4dp</item>
@@ -69,9 +82,9 @@
         <item name="android:paddingEnd">12dp</item>
     </style>
 
-    <!-- A dialog that has to explain itself above a list of choices. -->
+    <!-- DIALOG TEXT -->
     <style name="DialogTitle">
-        <item name="android:textColor">@color/pes_navy</item>
+        <item name="android:textColor">@color/pes_text</item>
         <item name="android:textSize">18sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:fontFamily">sans-serif-condensed</item>
@@ -83,7 +96,7 @@
         <item name="android:lineSpacingExtra">2dp</item>
     </style>
 
-    <!-- CANCEL and other ways out: blue capitals, no fill. -->
+    <!-- QUIET DIALOG BUTTON -->
     <style name="DialogButtonQuiet" parent="Widget.AppCompat.Button.Borderless">
         <item name="android:layout_marginStart">4dp</item>
         <item name="android:layout_marginEnd">4dp</item>
@@ -99,7 +112,7 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
-    <!-- A settings panel's header row: a solid bar, as the PES 6 menus' header strips. -->
+    <!-- SECTION HEADING -->
     <style name="SectionHeading">
         <item name="android:layout_marginTop">14dp</item>
         <item name="android:background">@drawable/bg_section_bar</item>
@@ -113,7 +126,7 @@
         <item name="android:fontFamily">sans-serif-condensed</item>
     </style>
 
-    <!-- One setting: a row with a hairline under it, label on the left. -->
+    <!-- SETTING LABEL -->
     <style name="SettingLabel">
         <item name="android:layout_marginTop">2dp</item>
         <item name="android:background">@drawable/bg_setting_row</item>
@@ -147,7 +160,7 @@
         <item name="android:fontFamily">sans-serif-condensed</item>
     </style>
 
-    <!-- The main menu's entries: big italic capitals, left-aligned, as PES 6's. -->
+    <!-- MAIN MENU -->
     <style name="MenuEntry">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">0dp</item>
@@ -158,7 +171,7 @@
         <item name="android:paddingStart">6dp</item>
         <item name="android:drawablePadding">8dp</item>
         <item name="android:drawableStart">@drawable/ic_menu_cursor_space</item>
-        <item name="android:textColor">@color/pes_navy</item>
+        <item name="android:textColor">@color/pes_text</item>
         <item name="android:textSize">17sp</item>
         <item name="android:textStyle">bold|italic</item>
         <item name="android:textAllCaps">true</item>
@@ -167,10 +180,7 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
-    <!-- The same entries in portrait, where the column scrolls: a row that
-         grows with the system font instead of a fixed 48dp box, so at
-         fontScale 2.0 the label is not cut off. The weight is cancelled, not
-         inherited. -->
+    <!-- PORTRAIT MENU -->
     <style name="MenuEntryRow" parent="MenuEntry">
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_weight">0</item>
@@ -181,7 +191,7 @@
         <item name="android:textSize">15sp</item>
     </style>
 
-    <!-- A card holding one group of settings (Display, Frame rate, ...). -->
+    <!-- SETTINGS GROUP -->
     <style name="SettingGroup">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
@@ -191,6 +201,7 @@
         <item name="android:padding">4dp</item>
     </style>
 
+    <!-- TABS -->
     <style name="TabEntry">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">wrap_content</item>
@@ -207,7 +218,7 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
-    <!-- BACK: gold italic capitals with an arrow, on the strip's navy. -->
+    <!-- BACK BUTTON -->
     <style name="BackButton">
         <item name="android:background">@android:color/transparent</item>
         <item name="android:minHeight">36dp</item>
@@ -223,6 +234,7 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
+    <!-- PANEL BUTTON -->
     <style name="PanelButton" parent="Widget.AppCompat.Button">
         <item name="android:background">@drawable/bg_button_action</item>
         <item name="android:textColor">@color/pes_on_dark</item>
@@ -232,17 +244,19 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
-    <!-- PATCHES' actions: a full 48dp target, so a thumb or TalkBack hits it. -->
+    <!-- ACTION BUTTON -->
     <style name="ActionButton" parent="PanelButton">
         <item name="android:minHeight">48dp</item>
         <item name="android:textSize">13sp</item>
     </style>
 
+    <!-- DANGER BUTTON -->
     <style name="DangerButton" parent="ActionButton">
         <item name="android:background">@drawable/bg_button_danger</item>
         <item name="android:textColor">@color/pes_red</item>
     </style>
 
+    <!-- QUIET BUTTON -->
     <style name="QuietButton" parent="Widget.AppCompat.Button.Borderless">
         <item name="android:minHeight">48dp</item>
         <item name="android:textColor">@color/pes_blue</item>
@@ -252,7 +266,7 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
-    <!-- INSTALLED / INCOMPLETE / NOT INSTALLED, on a navy or red pill. -->
+    <!-- STATUS PILL -->
     <style name="StatusPill">
         <item name="android:background">@drawable/bg_pill_badge</item>
         <item name="android:paddingStart">9dp</item>
@@ -266,4 +280,5 @@
         <item name="android:fontFamily">sans-serif-condensed</item>
         <item name="android:letterSpacing">0.06</item>
     </style>
+
 </resources>
