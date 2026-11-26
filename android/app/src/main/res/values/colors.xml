@@ -7,19 +7,19 @@
     <color name="launcher_background">#080D18</color>
     <color name="pes_page">#080D18</color>
 
-    <!-- PES / Xclipse identity -->
+    <!-- Brand colors -->
     <color name="pes_navy">#0B1428</color>
     <color name="pes_blue">#1677C8</color>
     <color name="pes_red">#E32636</color>
     <color name="pes_garnet">#A50044</color>
     <color name="pes_gold">#F3C742</color>
 
-    <!-- Panels and rows -->
+    <!-- Surface colors -->
     <color name="pes_panel">#111C2E</color>
     <color name="pes_row">#16243A</color>
     <color name="pes_line">#263A56</color>
 
-    <!-- Typography -->
+    <!-- Text colors -->
     <color name="pes_text">#E7EDF7</color>
     <color name="pes_muted">#9AAAC0</color>
     <color name="pes_on_dark">#FFFFFF</color>
