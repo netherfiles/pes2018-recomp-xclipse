@@ -1,19 +1,24 @@
+
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A destructive action: red rule and red type, clearly apart from RESTORE. -->
+<!-- Xclipse Dark Edition - Destructive action -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
-    android:color="#33DC0014">
+    android:color="#55E32636">
     <item>
         <selector>
             <item android:state_enabled="false">
                 <shape android:shape="rectangle">
-                    <solid android:color="#F2F4F8" />
-                    <stroke android:width="1dp" android:color="#C9D1DE" />
+                    <solid android:color="#202A38" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="#465268" />
                 </shape>
             </item>
             <item>
                 <shape android:shape="rectangle">
-                    <solid android:color="#FFF5F6" />
-                    <stroke android:width="1dp" android:color="#DC0014" />
+                    <solid android:color="#30151D" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="#E32636" />
                 </shape>
             </item>
         </selector>
