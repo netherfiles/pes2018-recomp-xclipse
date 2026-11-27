@@ -1,3 +1,4 @@
+
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Portrait variant (same ids): the wordmark and the build line in a header,
      the entries as one scrolling column with the chosen entry's details under
@@ -182,7 +183,7 @@
             </LinearLayout>
         </ScrollView>
 
-        <!-- Where the build came from: one tap opens the project's source. -->
+        <!-- Developer credits: Xclipse Edition first, original developer second. -->
         <LinearLayout
             android:id="@+id/credit_row"
             android:layout_width="match_parent"
@@ -208,9 +209,11 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
-                android:text="github.com/sharifhidayatulloh/pes2018-recomp"
+                android:gravity="center_vertical"
+                android:text="Xclipse Edition developer — github.com/netherfiles&#10;Original developer — github.com/sharifhidayatulloh"
                 android:textColor="@color/pes_blue"
                 android:textSize="9sp"
+                android:lineSpacingExtra="3dp"
                 android:fontFamily="sans-serif"
                 android:importantForAccessibility="no"
                 tools:ignore="HardcodedText" />
