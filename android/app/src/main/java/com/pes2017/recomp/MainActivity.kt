@@ -205,10 +205,15 @@ class MainActivity : AppCompatActivity() {
             showDetail(getString(R.string.check_for_updates), getString(R.string.update_checking))
             checkForUpdates(manual = true)
         }
-        // The credit row sits above the strip only in the portrait layout.
-        findViewById<android.view.View>(R.id.credit_row)?.setOnClickListener {
-            openPage(RELEASES_PAGE)
+
+        // Independent links for both developers.
+        findViewById<android.view.View>(R.id.credit_xclipse)?.setOnClickListener {
+            openPage("https://github.com/netherfiles")
         }
+        findViewById<android.view.View>(R.id.credit_original)?.setOnClickListener {
+            openPage("https://github.com/sharifhidayatulloh")
+        }
+
         // The cursor starts on KICK OFF, and the strip at the foot scrolls
         // (a marquee runs only on a selected view). A restored selection is
         // the same programmatic move: no detail auto-scroll for either.
@@ -250,9 +255,7 @@ class MainActivity : AppCompatActivity() {
         )
         autoUpdateCheck()
         predownloadDriver()
-    }
-
-    /**
+    }    /**
      * First run on an Adreno phone: fetch the matching Turnip build in the
      * background so it is in the driver list. It is only stored; choosing it
      * is the player's call (Graphics driver).
@@ -771,9 +774,7 @@ class MainActivity : AppCompatActivity() {
         val code = prefs.lastUpdateCode
         if (code > 0) return if (code > installed) tag else ""
         return if (UpdateFeed.isNewerName(installedVersion, tag)) tag else ""
-    }
-
-    /** The installed build number, or 0 if the package manager will not say. */
+    }    /** The installed build number, or 0 if the package manager will not say. */
     private fun installedCode(): Int = try {
         val info = packageManager.getPackageInfo(packageName, 0)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode.toInt()
