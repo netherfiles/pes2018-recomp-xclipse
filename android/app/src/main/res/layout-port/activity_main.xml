@@ -182,19 +182,18 @@
             </LinearLayout>
         </ScrollView>
 
-        <!-- Developer credits: Xclipse Edition first, original developer second. -->
+        <!-- Developer credits: each developer has an independent clickable view. -->
         <LinearLayout
             android:id="@+id/credit_row"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="48dp"
-            android:background="?attr/selectableItemBackground"
-            android:clickable="true"
-            android:focusable="true"
             android:gravity="center"
             android:orientation="horizontal"
             android:paddingStart="12dp"
             android:paddingEnd="12dp"
+            android:paddingTop="5dp"
+            android:paddingBottom="5dp"
             android:contentDescription="@string/about_source">
 
             <ImageView
@@ -203,19 +202,38 @@
                 android:src="@drawable/ic_github"
                 android:importantForAccessibility="no" />
 
-            <TextView
-                android:id="@+id/credit_url"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
-                android:gravity="center_vertical"
-                android:text="Xclipse Edition developer — github.com/netherfiles&#10;Original developer — github.com/sharifhidayatulloh"
-                android:textColor="@color/pes_blue"
-                android:textSize="9sp"
-                android:lineSpacingExtra="3dp"
-                android:fontFamily="sans-serif"
-                android:importantForAccessibility="no"
-                tools:ignore="HardcodedText" />
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/credit_xclipse"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:text="Xclipse Edition developer — github.com/netherfiles"
+                    android:textColor="@color/pes_blue"
+                    android:textSize="9sp"
+                    android:fontFamily="sans-serif"
+                    tools:ignore="HardcodedText" />
+
+                <TextView
+                    android:id="@+id/credit_original"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:text="Original developer — github.com/sharifhidayatulloh"
+                    android:textColor="@color/pes_blue"
+                    android:textSize="9sp"
+                    android:fontFamily="sans-serif"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
 
             <TextView
                 android:layout_width="wrap_content"
