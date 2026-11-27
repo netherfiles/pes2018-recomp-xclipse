@@ -1,3 +1,4 @@
+
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The launcher, laid out like PES 6's main menu: the
      wordmark top-left, a left-aligned list of italic entries with a cursor and
@@ -62,6 +63,17 @@
                 android:textSize="9sp"
                 android:fontFamily="sans-serif"
                 tools:text="0.0.2-alpha · build 16 · EUROPE" />
+
+            <Button
+                android:id="@+id/language_button"
+                android:layout_width="44dp"
+                android:layout_height="40dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:padding="0dp"
+                android:text="🌐"
+                android:textSize="20sp"
+                android:contentDescription="Change language" />
         </LinearLayout>
 
         <LinearLayout
