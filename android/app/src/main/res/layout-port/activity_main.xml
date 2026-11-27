@@ -1,3 +1,4 @@
+
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Portrait variant (same ids): the wordmark and the build line in a header,
      the entries as one scrolling column with the chosen entry's details under
@@ -48,6 +49,17 @@
                     android:textSize="11sp"
                     android:fontFamily="sans-serif"
                     tools:text="0.0.2-alpha · build 16 · EUROPE" />
+
+                <Button
+                    android:id="@+id/language_button"
+                    android:layout_width="44dp"
+                    android:layout_height="40dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
+                    android:text="🌐"
+                    android:textSize="20sp"
+                    android:contentDescription="Change language" />
             </LinearLayout>
 
             <View
