@@ -1,1 +1,94 @@
+diff --git a/runtime/gpu/command_processor.cpp b/runtime/gpu/command_processor.cpp
+index 8f4f29a..ffec940 100644
+--- a/runtime/gpu/command_processor.cpp
++++ b/runtime/gpu/command_processor.cpp
+@@ -273,6 +273,19 @@ namespace
+         if (index >= kScratchReg0 && index <= kScratchReg0 + 7)
+         {
+             const uint32_t n = index - kScratchReg0;
++#if PES17_DIAGNOSTICS
++            if (n == 5)
++            {
++                // D3D's flip request: the present interval is in bits 8-11 (1 in play, 2 in cutscenes and
++                // loading, which is 30 fps). Logged when it changes, to see what each mode asks for; the
++                // count is capped in case the register is used for something else as well.
++                static std::atomic<uint32_t> lastInterval{0xFFFFFFFFu};
++                static std::atomic<uint32_t> logged{0};
++                const uint32_t interval = (value >> 8) & 0xF;
++                if (lastInterval.exchange(interval) != interval && logged.fetch_add(1) < 300)
++                    LOGI("gpu: the title asks for present interval %u (flip request %08X)", interval, value);
++            }
++#endif
+             const uint32_t umsk = RegisterOrAperture(kScratchUmsk);
+             if (umsk & (1u << n)) WritePhysical(RegisterOrAperture(kScratchAddr) + n * 4, value);
+             return;
+diff --git a/runtime/kernel/input.cpp b/runtime/kernel/input.cpp
+index 81175e6..6b6acfd 100644
+--- a/runtime/kernel/input.cpp
++++ b/runtime/kernel/input.cpp
+@@ -20,6 +20,7 @@
+ #ifdef PES17_ANDROID
+ #include "../android/android.h"
+ #include <algorithm>
++#include <chrono>
+ #include <cstring>
+ #endif
+ 
+@@ -470,6 +471,33 @@ PPC_FUNC(__imp__XamInputGetState)
+         }
+ 
+         Latch& latch = g_latch[user & 3];
++#if PES17_DIAGNOSTICS
++        {
++            // The replay that will not be skipped: what the title sees of START, and whether it
++            // is still polling. One line per START edge, one per gap of 300 ms or more in the polls.
++            using Clock = std::chrono::steady_clock;
++            static Clock::time_point lastPoll[4];
++            static bool startDown[4];
++            static uint32_t pollsSinceEdge[4];
++            const uint32_t slot = user & 3;
++            const auto now = Clock::now();
++            if (lastPoll[slot].time_since_epoch().count() != 0)
++            {
++                const long long gap = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(now - lastPoll[slot]).count();
++                if (slot == 0 && gap >= 300) LOGI("input: XamInputGetState user 0 was not polled for %lld ms", gap);
++            }
++            lastPoll[slot] = now;
++            pollsSinceEdge[slot]++;
++            const bool start = (pad.buttons & 0x0010) != 0;
++            if (start != startDown[slot])
++            {
++                startDown[slot] = start;
++                LOGI("input: XamInputGetState user %u sees START %s (%u polls since the last edge)",
++                     user, start ? "down" : "up", pollsSinceEdge[slot]);
++                pollsSinceEdge[slot] = 0;
++            }
++        }
++#endif
+         const bool changed = latch.buttons != pad.buttons ||
+                              std::memcmp(latch.triggers, triggers, sizeof triggers) != 0 ||
+                              std::memcmp(latch.axes, axes, sizeof axes) != 0;
+diff --git a/runtime/kernel/keystroke.cpp b/runtime/kernel/keystroke.cpp
+index e8a2003..ba93656 100644
+--- a/runtime/kernel/keystroke.cpp
++++ b/runtime/kernel/keystroke.cpp
+@@ -10,6 +10,7 @@
+ #include "kernel.h"
+ #include "../guest.h"
+ #include "../log.h"
++#include "../diagnostics.h"
+ 
+ #ifdef PES17_ANDROID
+ #include "../android/android.h"
+@@ -74,6 +75,10 @@ namespace
+         p[2] = 0; p[3] = 0;                                 // unicode
+         p[4] = uint8_t(flags >> 8); p[5] = uint8_t(flags);  // flags
+         p[6] = uint8_t(user); p[7] = 0;                     // user, hid code
++#if PES17_DIAGNOSTICS
++        if (vk == 0x5814 && !(flags & kKeyRepeat))
++            LOGI("input: XamInputGetKeystrokeEx user %u START %s", user, (flags & kKeyDown) ? "down" : "up");
++#endif
+     }
+ }
+ 
 
