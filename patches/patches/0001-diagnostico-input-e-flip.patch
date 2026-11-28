@@ -1,0 +1,200 @@
+# Compila o APK do PES 2018 (recomp) no GitHub Actions.
+# Salve como: .github/workflows/build-apk.yml
+#
+# Antes da primeira execução, crie no repositório uma Release com a tag
+# "game-files" e anexe a ela o seu default.xex (o workflow baixa de lá).
+# Na primeira execução o workflow também cria uma chave de assinatura e a
+# guarda nessa mesma Release (signing.jks), para os próximos APKs serem
+# atualizações uns dos outros.
+
+name: Build APK (Xclipse)
+
+on:
+  workflow_dispatch:
+    inputs:
+      diagnostics:
+        description: "Compilar com os traces de diagnóstico (heap trace, relatórios)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # só para guardar a chave de assinatura na Release
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GAME_TAG: game-files
+  NDK_VERSION: 28.2.13676358
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Aplica os arquivos .patch da pasta patches/ (em ordem). Se algum não
+      # aplicar, o build para aqui, em segundos, com o erro no log.
+      - name: Aplicar patches
+        run: |
+          shopt -s nullglob
+          for p in patches/*.patch; do
+            echo "==> $p"
+            git apply --ignore-whitespace --verbose "$p"
+          done
+
+      - name: Ferramentas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build ccache python3 git
+
+      - name: Android SDK e NDK
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-35" "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      # Sem isto o app não carrega drivers customizados (o seu log dizia:
+      # "this build has no libadrenotools"). O CMake só liga o suporte se a
+      # pasta third_party/libadrenotools existir na hora do build.
+      - name: Baixar libadrenotools (driver Xclipse customizado)
+        run: |
+          bash android/fetch_deps.sh
+          ls third_party/libadrenotools > /dev/null
+
+      - name: Restaurar cache do compilador
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache-pes
+          key: ccache-${{ github.run_id }}
+          restore-keys: ccache-
+
+      - name: Baixar default.xex da Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/GAME"
+          gh release download "$GAME_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern default.xex --dir "$RUNNER_TEMP/GAME"
+          HASH=$(sha256sum "$RUNNER_TEMP/GAME/default.xex" | cut -d' ' -f1)
+          echo "default.xex sha256: $HASH"
+          if [ "$HASH" != "18d1e93ee219bd590b2558b6004b05785a36e3bcb01219ef0bccb4bab3552c5d" ]; then
+            echo "::warning::default.xex difere do hash que o app espera. O build continua, mas confira se é o arquivo certo."
+          fi
+
+      - name: Chave de assinatura
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          KS="$RUNNER_TEMP/signing.jks"
+          if gh release download "$GAME_TAG" --repo "$GITHUB_REPOSITORY" \
+               --pattern signing.jks --dir "$RUNNER_TEMP" 2>/dev/null; then
+            echo "Chave existente reaproveitada."
+          else
+            keytool -genkeypair -keystore "$KS" -storepass pes2018xclipse \
+              -keypass pes2018xclipse -alias pes -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=PES2018 Xclipse"
+            gh release upload "$GAME_TAG" "$KS" --repo "$GITHUB_REPOSITORY"
+            echo "Chave nova criada e guardada na Release."
+          fi
+          {
+            echo "PES17_KEYSTORE=$KS"
+            echo "PES17_KEYSTORE_PASSWORD=pes2018xclipse"
+            echo "PES17_KEY_ALIAS=pes"
+            echo "PES17_KEY_PASSWORD=pes2018xclipse"
+          } >> "$GITHUB_ENV"
+
+      # O passo demorado: recompila o PowerPC para C++ e compila libpes17.so.
+      # O limite do passo é menor que o do job de propósito: se estourar, o
+      # cache do compilador ainda é salvo no passo seguinte, e rodar de novo
+      # continua de onde parou.
+      - name: Recompilar e compilar libpes17.so
+        timeout-minutes: 310
+        env:
+          GAME: ${{ runner.temp }}/GAME
+          CCACHE: "1"
+          CCACHE_DIR: /home/runner/.ccache-pes
+          CCACHE_MAXSIZE: 5G
+          DIAGNOSTICS: ${{ inputs.diagnostics && 'ON' || 'OFF' }}
+        run: bash build.sh 2>&1 | tee "$RUNNER_TEMP/build-log.txt"
+
+      - name: Salvar cache do compilador
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache-pes
+          key: ccache-${{ github.run_id }}
+
+      # Extrai só as duas funções do crash (sub_82437710 e sub_82439850)
+      # para eu poder escrever a proteção do heap na próxima rodada.
+      - name: Extrair funções do crash
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, re
+          out = []
+          for path in sorted(glob.glob("ppc/ppc_recomp.*.cpp")):
+              text = open(path, encoding="utf-8", errors="replace").read()
+              for name in ("82437710", "82439850"):
+                  m = re.search(r"PPC_FUNC_IMPL\(__imp__sub_%s\) \{" % name, text)
+                  if not m:
+                      continue
+                  end = text.find("PPC_WEAK_FUNC", m.end())
+                  end = end if end != -1 else m.start() + 200000
+                  out.append("// ---- %s: sub_%s\n%s" % (path, name, text[m.start():end]))
+          open("crash-site.cpp.txt", "w").write("\n\n".join(out) or "(funções não encontradas)")
+          PY
+
+      - name: Empacotar o APK
+        env:
+          PES17_APP_ID_SUFFIX: xclipse
+          PES17_VERSION_NAME: 0.3.2-xclipse
+        run: |
+          BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          STAGE="$GITHUB_WORKSPACE/build-android/stage/arm64-v8a"
+          mkdir -p "$STAGE"
+          cp build-android/libpes17.so "$STAGE/"
+          "$BIN/bin/llvm-strip" --strip-debug "$STAGE/libpes17.so"
+          for hook in build-android/adrenotools/src/hook/lib*_hook.so \
+                      build-android/adrenotools/src/hook/libhook_impl.so; do
+            if [ -f "$hook" ]; then cp "$hook" "$STAGE/"; fi
+          done
+          cp "$BIN/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$STAGE/"
+          for lib in libmain_hook.so libhook_impl.so; do
+            [ -f "$STAGE/$lib" ] || { echo "FALTA $lib: o libadrenotools não entrou no build"; exit 1; }
+          done
+          tools/verify_android_libs.sh "$STAGE/libpes17.so"
+          export PES17_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))
+          export PES17_BUILD_SHA="${GITHUB_SHA::7}"
+          export PES17_BUILD_STAMP="$(date -u +%Y%m%d-%H%M%S)"
+          cd android
+          sh ./gradlew --no-daemon :app:assembleRelease \
+            -PprebuiltNative="$GITHUB_WORKSPACE/build-android/stage"
+
+      - name: Enviar o APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pes2018-xclipse-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 5
+
+      - name: Enviar os logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ${{ runner.temp }}/build-log.txt
+            logs-*.txt
+            crash-site.cpp.txt
+          retention-days: 5
+          if-no-files-found: ignore
