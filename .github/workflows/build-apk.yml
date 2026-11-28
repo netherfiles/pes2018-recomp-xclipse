@@ -1,3 +1,12 @@
+# Compila o APK do PES 2018 (recomp) no GitHub Actions.
+# Salve como: .github/workflows/build-apk.yml
+#
+# Antes da primeira execução, crie no repositório uma Release com a tag
+# "game-files" e anexe a ela o seu default.xex (o workflow baixa de lá).
+# Na primeira execução o workflow também cria uma chave de assinatura e a
+# guarda nessa mesma Release (signing.jks), para os próximos APKs serem
+# atualizações uns dos outros.
+
 name: Build APK (Xclipse)
 
 on:
@@ -30,6 +39,16 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      # Aplica os arquivos .patch da pasta patches/ (em ordem). Se algum não
+      # aplicar, o build para aqui, em segundos, com o erro no log.
+      - name: Aplicar patches
+        run: |
+          shopt -s nullglob
+          for p in patches/*.patch; do
+            echo "==> $p"
+            git apply --ignore-whitespace --verbose "$p"
+          done
 
       - name: Ferramentas
         run: |
@@ -166,7 +185,7 @@ jobs:
         with:
           name: pes2018-xclipse-apk
           path: android/app/build/outputs/apk/release/*.apk
-          retention-days: 14
+          retention-days: 5
 
       - name: Enviar os logs
         if: always()
@@ -177,5 +196,5 @@ jobs:
             ${{ runner.temp }}/build-log.txt
             logs-*.txt
             crash-site.cpp.txt
-          retention-days: 14
+          retention-days: 5
           if-no-files-found: ignore
